@@ -8,7 +8,7 @@ const DEFAULT_RETENTION_DAYS = 90;
 const DEFAULT_MAX_ENTRIES = 5000;
 const DEFAULT_LIST_LIMIT = 50;
 // Prune on every Nth append instead of on a timer, so the store stays small on its own.
-const PRUNE_EVERY = 100;
+export const PRUNE_EVERY = 100;
 
 /** The ms timestamp encoded in a `log:<15-digit ms>:<hex>` key. */
 const keyTime = (key: string): number => Number(key.slice(PREFIX.length, PREFIX.length + 15));

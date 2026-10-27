@@ -153,7 +153,9 @@ export class GoToAuth {
       creds,
     );
     if (!t.refresh_token) {
-      throw new GoToApiError(200, 'GoTo returned no refresh token for the login');
+      throw new GoToApiError(200, 'GoTo returned no refresh token for the login', {
+        tokenEndpoint: true,
+      });
     }
     // A plain set: a fresh login replaces whatever was there. An in-flight refresh will
     // lose its compareAndSet and pick these tokens up instead.
@@ -424,7 +426,9 @@ export class GoToAuth {
     if (status < 200 || status >= 300) {
       // Only the status and the OAuth `error` code: a proxy or IdP could echo the request
       // (refresh_token, code) back in the body.
-      throw new GoToApiError(status, `GoTo token endpoint returned ${status}${oauthError(text)}`);
+      throw new GoToApiError(status, `GoTo token endpoint returned ${status}${oauthError(text)}`, {
+        tokenEndpoint: true,
+      });
     }
 
     // Never put a success body in an error: it holds tokens.
@@ -432,10 +436,10 @@ export class GoToAuth {
     try {
       body = JSON.parse(text);
     } catch {
-      throw new GoToApiError(status, 'Malformed token response');
+      throw new GoToApiError(status, 'Malformed token response', { tokenEndpoint: true });
     }
     if (typeof body !== 'object' || body === null) {
-      throw new GoToApiError(status, 'Malformed token response');
+      throw new GoToApiError(status, 'Malformed token response', { tokenEndpoint: true });
     }
     const t = body as Partial<Record<keyof TokenResponse, unknown>>;
     if (
@@ -444,7 +448,7 @@ export class GoToAuth {
       (t.expires_in !== undefined && typeof t.expires_in !== 'number') ||
       (t.refresh_token !== undefined && typeof t.refresh_token !== 'string')
     ) {
-      throw new GoToApiError(status, 'Malformed token response');
+      throw new GoToApiError(status, 'Malformed token response', { tokenEndpoint: true });
     }
     return t as TokenResponse;
   }

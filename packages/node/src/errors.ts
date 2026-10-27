@@ -36,10 +36,16 @@ export class NotConfiguredError extends GoToSmsError {
 export class GoToApiError extends GoToSmsError {
   readonly status: number;
   readonly body: string;
-  constructor(status: number, body: string) {
+  /**
+   * True when the OAuth token endpoint raised this, so no API request (e.g. a send) went
+   * out. Senders rely on it: a 2xx GoToApiError otherwise means the API accepted the call.
+   */
+  readonly tokenEndpoint?: true;
+  constructor(status: number, body: string, o: { tokenEndpoint?: boolean } = {}) {
     super(`GoTo API error ${status}`, 'api');
     this.status = status;
     this.body = body.slice(0, 500);
+    if (o.tokenEndpoint) this.tokenEndpoint = true;
   }
 }
 

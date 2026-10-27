@@ -8,8 +8,8 @@ import {
   SendFailedError,
   TemporaryError,
 } from './errors.js';
-import { errorName, MALFORMED_API_RESPONSE, type GoToHttp } from './http.js';
-import type { MessageLog } from './log.js';
+import { errorName, type GoToHttp } from './http.js';
+import { PRUNE_EVERY, type MessageLog } from './log.js';
 import type { GoToAuth } from './oauth.js';
 import type { OptOuts } from './optouts.js';
 import { normalizePhone } from './phone.js';
@@ -84,18 +84,24 @@ function translate(err: unknown): SendResult {
   }
   if (err instanceof GoToApiError) {
     const { status, body } = err;
-    if (status >= 200 && status < 300) {
-      // The send endpoint answered 2xx with a body that didn't parse: GoTo most likely
-      // accepted the text. Any other 2xx error is the token endpoint's garbled answer,
-      // raised before the POST left, so the text was not sent.
-      return body === MALFORMED_API_RESPONSE
-        ? { status: 'uncertain', reason: R.unreadableAnswer }
-        : { status: 'rejected', reason: R.noToken, retryable: true };
+    // The token endpoint failed before the POST left, so the text was not sent. A garbled
+    // 2xx there is likely transient; its other answers are login/config problems.
+    if (err.tokenEndpoint) {
+      return status >= 200 && status < 300
+        ? { status: 'rejected', reason: R.noToken, retryable: true }
+        : {
+            status: 'rejected',
+            reason: `GoTo's login service answered HTTP ${status} — the text was not sent`,
+          };
     }
+    // Any other 2xx error (e.g. an unparseable body): the send endpoint accepted the
+    // request and we can't prove the text didn't go out.
+    if (status >= 200 && status < 300) return { status: 'uncertain', reason: R.unreadableAnswer };
     // GoTo reports 10DLC problems under several statuses, so the body is checked first.
     if (/10dlc|campaign/i.test(body)) return { status: 'rejected', reason: R.tenDlc };
     if (status === 403) return { status: 'rejected', reason: R.forbidden };
-    if (status === 429 || status >= 500) {
+    // 408 is the server's definitive "not processed", like 429/5xx: safe to retry.
+    if (status === 408 || status === 429 || status >= 500) {
       return {
         status: 'rejected',
         reason: `GoTo is busy or unavailable (HTTP ${status}) — the text was not sent; try again later`,
@@ -124,6 +130,8 @@ export class Sender {
   private readonly o: SenderOptions;
   /** In-process sends in flight per dedupeKey; concurrent callers share one promise. */
   private readonly inFlight = new Map<string, Promise<SendResult>>();
+  /** Sends recorded by this instance; drives the periodic pruneDedupe(). */
+  private recorded = 0;
 
   constructor(o: SenderOptions) {
     if (o.logOnly && o.env.NODE_ENV === 'production') {
@@ -157,7 +165,9 @@ export class Sender {
   }
 
   async sendOrThrow(to: string, text: string, opts: SendOptions = {}): Promise<SendResult> {
-    const result = await this.send(to, text, opts);
+    // Forward only dedupeKey: bypassOptOut is internal (the STOP confirmation) and must not
+    // be reachable through this public method, even by an untyped caller.
+    const result = await this.send(to, text, { dedupeKey: opts.dedupeKey });
     if (result.status !== 'sent') throw new SendFailedError(result);
     return result;
   }
@@ -272,7 +282,13 @@ export class Sender {
 
     // Nothing after the POST may throw: an exception here would look like a failed send
     // and invite a retry, i.e. a double send. Store failures are logged instead.
-    if (dedupeKey !== undefined && (result.status === 'sent' || result.status === 'uncertain')) {
+    // logOnly never persists: a "sent" that wasn't would be replayed as deduped once
+    // logOnly is turned off on the same store. (The in-flight map still dedupes.)
+    if (
+      dedupeKey !== undefined &&
+      !this.o.logOnly &&
+      (result.status === 'sent' || result.status === 'uncertain')
+    ) {
       try {
         await this.o.store.set(this.o.tenant, DEDUPE_PREFIX + dedupeKey, {
           result: result as unknown as Json,
@@ -314,6 +330,14 @@ export class Sender {
       this.o.logger.warn('goto-sms: could not write the message log', { error: errorName(err) });
     }
     this.infoLine(result, to);
+    // Keep dedupe records bounded on the same every-Nth cadence as the log's own prune.
+    if (++this.recorded % PRUNE_EVERY === 0) {
+      try {
+        await this.pruneDedupe();
+      } catch (err) {
+        this.o.logger.warn('goto-sms: could not prune dedupe records', { error: errorName(err) });
+      }
+    }
     return result;
   }
 
