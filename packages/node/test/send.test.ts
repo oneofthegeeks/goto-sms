@@ -10,6 +10,7 @@ import { OptOuts } from '../src/optouts.js';
 import { MessageLog } from '../src/log.js';
 import { Sender } from '../src/send.js';
 import {
+  GoToApiError,
   GoToSmsError,
   LoginExpiredError,
   NotConfiguredError,
@@ -269,7 +270,7 @@ test('C14 403 and 10DLC reasons', async () => {
   fake.failNext('POST', P, 403, { message: 'No approved Campaign for this number' });
   assert.deepEqual(await sender.send(TO, 'x'), { status: 'rejected', reason: tenDlc, to: TO });
 
-  for (const status of [429, 500, 503]) {
+  for (const status of [408, 429, 500, 503]) {
     fake.failNext('POST', P, status);
     const r = await sender.send(TO, 'x');
     assert.equal(r.status, 'rejected');
@@ -422,6 +423,18 @@ test('token and error mapping from a stub http', async () => {
     ],
     [new TemporaryError('x', { requestSent: true }), { status: 'uncertain' }],
     [new TemporaryError('x'), { status: 'rejected', retryable: true }],
+    // A 2xx error not marked as from the token endpoint: the POST was accepted.
+    [new GoToApiError(200, 'anything'), { status: 'uncertain' }],
+    [new GoToApiError(201, 'Malformed JSON response'), { status: 'uncertain' }],
+    // Token endpoint errors happen before the POST: never sent.
+    [
+      new GoToApiError(200, 'Malformed token response', { tokenEndpoint: true }),
+      { status: 'rejected', retryable: true },
+    ],
+    [
+      new GoToApiError(404, 'GoTo token endpoint returned 404', { tokenEndpoint: true }),
+      { status: 'rejected' },
+    ],
   ];
   for (const [err, expected] of cases) {
     const r = await make({ http: failing(err) }).send(TO, 'hello');
@@ -448,6 +461,41 @@ test('logOnly needs only a sending number, runs the gates and never posts', asyn
 
   const noFrom = await setup({ env: {}, connect: false });
   assert.equal((await noFrom.make({ logOnly: true }).send(TO, 'hi')).status, 'not_connected');
+});
+
+test('sendOrThrow ignores a smuggled bypassOptOut', async () => {
+  const { make, optOuts, fake } = await setup();
+  await optOuts.add(TO, 'keyword');
+  const smuggled = { bypassOptOut: true } as any; // oxlint-disable-line typescript/no-explicit-any
+  await assert.rejects(make().sendOrThrow(TO, 'hello', smuggled), (err: unknown) => {
+    assert.ok(err instanceof SendFailedError);
+    assert.equal(err.result.status, 'opted_out');
+    return true;
+  });
+  assert.equal(fake.sent.length, 0);
+});
+
+test('logOnly never persists dedupe records, so turning it off sends for real', async () => {
+  const { make, store, fake } = await setup();
+  const fake1 = await make({ logOnly: true }).send(TO, 'hello', { dedupeKey: 'lo' });
+  assert.equal(fake1.reason, 'log-only mode');
+  assert.equal(await store.get(T, 'dedupe:lo'), undefined);
+  const real = await make().send(TO, 'hello', { dedupeKey: 'lo' });
+  assert.equal(real.status, 'sent');
+  assert.equal(real.deduped, undefined);
+  assert.equal(fake.sent.length, 1);
+});
+
+test('every 100th recorded send prunes old dedupe records', async () => {
+  const { make, store, clock } = await setup();
+  const sender = make();
+  await sender.send(TO, 'old', { dedupeKey: 'old' }); // recorded send 1
+  clock.t += 91 * 86_400_000;
+  // Gate rejections are recorded sends too, and need no network.
+  for (let i = 2; i < 100; i++) await sender.send(TO, '');
+  assert.notEqual(await store.get(T, 'dedupe:old'), undefined, 'not pruned before the 100th');
+  await sender.send(TO, ''); // recorded send 100
+  assert.equal(await store.get(T, 'dedupe:old'), undefined);
 });
 
 test('sendOrThrow throws SendFailedError carrying result', async () => {

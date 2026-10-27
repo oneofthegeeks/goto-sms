@@ -2,12 +2,6 @@ import { GoToApiError, LoginExpiredError, TemporaryError } from './errors.js';
 import type { FetchLike } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-/**
- * Body of the GoToApiError thrown when the API answered 2xx with unparseable JSON. Senders
- * match on it: only this 2xx means the request itself was accepted (a token-endpoint 2xx
- * garbage error also carries a 2xx status, but nothing was sent then).
- */
-export const MALFORMED_API_RESPONSE = 'Malformed JSON response';
 
 export interface GoToHttp {
   /** Throws GoToApiError on a non-2xx answer; a 204 or empty body resolves to `{}`. */
@@ -75,7 +69,7 @@ export function createGoToHttp(o: {
         return JSON.parse(res.text) as T;
       } catch {
         // Fixed text: the body may hold PII (numbers, message text) and errors get logged (C22).
-        throw new GoToApiError(res.status, MALFORMED_API_RESPONSE);
+        throw new GoToApiError(res.status, 'Malformed JSON response');
       }
     },
   };
