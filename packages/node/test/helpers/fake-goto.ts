@@ -43,6 +43,13 @@ export interface FakeGoTo {
   failNext(method: string, pathPrefix: string, status: number, body?: unknown): void;
   /** The next matching request is accepted but never answered (timeout tests). */
   hangNext(method: string, pathPrefix: string): void;
+  /** Body served for GET /identity/v1/Users/me (default: one account, acct-1). */
+  me: unknown;
+  /**
+   * Pages served by GET /voice-admin/v1/phone-numbers (items per page), for any accountKey.
+   * pageMarker is the next page's index as a string; the last page carries no nextPageMarker.
+   */
+  numbersPages: unknown[][];
   inbound: Array<{ id: string; from: string; to: string; body: string; timestamp: string }>;
   /**
    * Register a handler. The longest matching prefix wins. API routes require a bearer
@@ -72,6 +79,12 @@ export async function startFakeGoTo(
     requests: [],
     sent: [],
     inbound: [],
+    me: {
+      'urn:scim:schemas:extension:getgo:1.0': {
+        accounts: [{ value: 'acct-1', display: 'Test Account' }],
+      },
+    },
+    numbersPages: [[]],
     tokens: { valid: new Set(), refresh: 'refresh-1', rotateOnRefresh: false, codes: new Map() },
     failNext(method, pathPrefix, status, body) {
       overrides.push({ method, prefix: pathPrefix, status, body });
@@ -139,14 +152,16 @@ export async function startFakeGoTo(
   );
 
   // --- API: identity (party-invites sms.js) ---
-  fake.route('GET', '/identity/v1/Users/me', () => ({
-    status: 200,
-    body: {
-      'urn:scim:schemas:extension:getgo:1.0': {
-        accounts: [{ value: 'acct-1', display: 'Test Account' }],
-      },
-    },
-  }));
+  fake.route('GET', '/identity/v1/Users/me', () => ({ status: 200, body: fake.me }));
+
+  // --- API: phone numbers (swu-ideas listNumbers), paged by pageMarker ---
+  fake.route('GET', '/voice-admin/v1/phone-numbers', (req) => {
+    const index = Number(req.query.get('pageMarker') ?? 0);
+    const items = fake.numbersPages[index];
+    if (!items) return { status: 400, body: { error: 'bad_page_marker' } };
+    const more = index + 1 < fake.numbersPages.length;
+    return { status: 200, body: { items, ...(more ? { nextPageMarker: String(index + 1) } : {}) } };
+  });
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
