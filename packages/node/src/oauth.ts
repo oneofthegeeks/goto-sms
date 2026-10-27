@@ -20,6 +20,8 @@ const DEFAULT_EXPIRES_IN_S = 3600;
 const STATE_PREFIX = 'state:';
 // 32 random bytes as base64url, unpadded.
 const STATE_FORMAT = /^[A-Za-z0-9_-]{43}$/;
+const SEED_REFUSED =
+  'GoTo refused GOTO_REFRESH_TOKEN; set a new one or connect from the setup page';
 const NOT_CONNECTED = 'Not connected to GoTo — open the setup page and click Connect';
 
 type RefreshSource = 'login' | 'seeded-from-env';
@@ -38,6 +40,16 @@ interface TokenResponse {
   access_token: string;
   expires_in?: number;
   refresh_token?: string;
+}
+
+/** ' (error: invalid_request)' from an OAuth error body, or '' when absent or odd-looking. */
+function oauthError(text: string): string {
+  try {
+    const e = (JSON.parse(text) as { error?: unknown }).error;
+    return typeof e === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(e) ? ` (error: ${e})` : '';
+  } catch {
+    return '';
+  }
 }
 
 const sha256hex = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -76,6 +88,13 @@ export class GoToAuth {
   private readonly timeoutMs: number;
   /** The in-flight refresh/seed; every concurrent caller awaits this same promise. */
   private inFlight: Promise<string> | undefined;
+  /**
+   * Hashes of env seeds GoTo refused while no tokens were stored. In memory on purpose
+   * (ruling R12): env only changes on restart, so this fails fast for the rest of the
+   * process, while a restart with a different seed is tried normally. The cost is one
+   * token call per process start while a bad seed stays configured.
+   */
+  private readonly refusedSeeds = new Set<string>();
 
   constructor(o: {
     store: GoToSmsStore;
@@ -154,16 +173,16 @@ export class GoToAuth {
     const seedHash = seed === undefined ? undefined : sha256hex(seed);
 
     // The operator put a different GOTO_REFRESH_TOKEN in env than the one these tokens
-    // came from: re-seed (this is also how a dead seeded login recovers).
+    // came from (or last tried): re-seed. This is also how a dead seeded login recovers.
     if (seed && seedHash && tokens?.seedHash && tokens.seedHash !== seedHash) {
       return this.exclusive(() => this.seedFlight(seed, seedHash));
     }
-    // Checked before first-time seeding so a refused seed fails fast afterwards.
-    if (await this.loginExpired()) throw new LoginExpiredError();
     if (!tokens) {
-      if (seed && seedHash) return this.exclusive(() => this.seedFlight(seed, seedHash));
-      throw new NotConfiguredError(NOT_CONNECTED);
+      if (!seed || !seedHash) throw new NotConfiguredError(NOT_CONNECTED);
+      if (this.refusedSeeds.has(seedHash)) throw new LoginExpiredError(SEED_REFUSED);
+      return this.exclusive(() => this.seedFlight(seed, seedHash));
     }
+    if (await this.loginExpired()) throw new LoginExpiredError();
     if (this.fresh(tokens)) return this.openToken(tokens.access);
     return this.exclusive(() => this.refreshFlight(false));
   }
@@ -244,13 +263,21 @@ export class GoToAuth {
     try {
       t = await this.tokenRequest({ grant_type: 'refresh_token', refresh_token: seed }, creds);
     } catch (err) {
-      if (err instanceof LoginExpiredError) {
-        await this.markLoginExpired();
-        // Remember this seed was tried, so the same refused seed isn't retried on every
-        // call (an unchanged seed never overrides stored tokens).
-        if (prev) await this.commit(prev, { ...prev, seedHash });
+      if (!(err instanceof LoginExpiredError)) throw err;
+      // A refused seed never sets login_expired (ruling R12): it says nothing about
+      // the login we already hold, if any.
+      if (!prev) {
+        this.refusedSeeds.add(seedHash);
+        throw new LoginExpiredError(SEED_REFUSED);
       }
-      throw err;
+      // Record the seed as tried on the existing tokens, so this same bad seed isn't
+      // retried on every call, then keep serving the existing login.
+      await this.commit(prev, { ...prev, seedHash });
+      this.logger.warn(
+        'GOTO_REFRESH_TOKEN changed but GoTo refused it; keeping the existing login',
+      );
+      if (await this.loginExpired()) throw new LoginExpiredError();
+      return this.refreshFlight(false);
     }
     const next = this.record(
       t,
@@ -394,7 +421,11 @@ export class GoToAuth {
     if (status === 408 || status === 429 || status >= 500) {
       throw new TemporaryError(`GoTo token endpoint answered HTTP ${status}`);
     }
-    if (status < 200 || status >= 300) throw new GoToApiError(status, text);
+    if (status < 200 || status >= 300) {
+      // Only the status and the OAuth `error` code: a proxy or IdP could echo the request
+      // (refresh_token, code) back in the body.
+      throw new GoToApiError(status, `GoTo token endpoint returned ${status}${oauthError(text)}`);
+    }
 
     // Never put a success body in an error: it holds tokens.
     let body: unknown;

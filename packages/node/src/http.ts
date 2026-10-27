@@ -68,7 +68,8 @@ export function createGoToHttp(o: {
       try {
         return JSON.parse(res.text) as T;
       } catch {
-        throw new GoToApiError(res.status, `Malformed JSON: ${res.text}`);
+        // Fixed text: the body may hold PII (numbers, message text) and errors get logged (C22).
+        throw new GoToApiError(res.status, 'Malformed JSON response');
       }
     },
   };

@@ -11,6 +11,7 @@ import { MemoryStore } from '../src/store/memory.js';
 import { FileStore } from '../src/store/file.js';
 import { SecretBox } from '../src/secrets.js';
 import {
+  GoToApiError,
   GoToSmsError,
   LoginExpiredError,
   NotConfiguredError,
@@ -37,6 +38,7 @@ async function setup(
     timeoutMs?: number;
     fake?: FakeGoTo;
     fetch?: typeof fetch;
+    logger?: Logger;
   } = {},
 ) {
   const fake = o.fake ?? (await startFakeGoTo());
@@ -55,7 +57,7 @@ async function setup(
       authBaseUrl: fake.url,
       redirectUri: REDIRECT,
       now: () => clock.t,
-      logger: silent,
+      logger: o.logger ?? silent,
       ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
     });
   const auth = make();
@@ -481,21 +483,97 @@ test('http: timeout → TemporaryError with requestSent; token errors pass throu
   });
 });
 
-test('a refused new env seed is remembered: later calls fail fast', async () => {
+test("a typo'd new env seed keeps the working login: no flag, warned once, not retried", async () => {
   const fake = await startFakeGoTo();
   cleanups.push(() => fake.close());
   const store = new MemoryStore();
   const box = new SecretBox(randomBytes(32));
   const base = { GOTO_CLIENT_ID: 'cid', GOTO_CLIENT_SECRET: 'csecret' };
   const A = await setup({ fake, store, box, env: { ...base, GOTO_REFRESH_TOKEN: 'refresh-1' } });
-  await A.auth.getAccessToken();
+  const working = await A.auth.getAccessToken();
 
-  const B = await setup({ fake, store, box, env: { ...base, GOTO_REFRESH_TOKEN: 'bogus' } });
-  await assert.rejects(B.auth.getAccessToken(), LoginExpiredError);
-  assert.equal(await store.get(T, 'login_expired'), true);
+  const warnings: string[] = [];
+  const logger: Logger = { ...silent, warn: (m) => warnings.push(m) };
+  const env = { ...base, GOTO_REFRESH_TOKEN: 'refresh-typo' };
+  const B = await setup({ fake, store, box, env, logger });
+  assert.equal(await B.auth.getAccessToken(), working);
+  assert.equal(await store.get(T, 'login_expired'), undefined);
+  assert.deepEqual(warnings, [
+    'GOTO_REFRESH_TOKEN changed but GoTo refused it; keeping the existing login',
+  ]);
+  assert.ok(!warnings.join().includes('refresh-typo'));
+
+  // Same bad seed: not retried, even by a new instance (the tried hash is on the tokens).
   const calls = B.tokenCalls();
-  await assert.rejects(B.auth.getAccessToken(), LoginExpiredError);
-  assert.equal(B.tokenCalls(), calls, 'the same bad seed is not retried');
+  assert.equal(await B.auth.getAccessToken(), working);
+  const C = await setup({ fake, store, box, env, logger });
+  assert.equal(await C.auth.getAccessToken(), working);
+  assert.equal(B.tokenCalls(), calls);
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(await C.auth.status(), {
+    connected: true,
+    loginExpired: false,
+    refreshSource: 'seeded-from-env',
+  });
+});
+
+test('refused first seed, then a new seed (new GoToAuth instance, same store) recovers', async () => {
+  const fake = await startFakeGoTo();
+  cleanups.push(() => fake.close());
+  const store = new MemoryStore();
+  const box = new SecretBox(randomBytes(32));
+  const base = { GOTO_CLIENT_ID: 'cid', GOTO_CLIENT_SECRET: 'csecret' };
+
+  const A = await setup({ fake, store, box, env: { ...base, GOTO_REFRESH_TOKEN: 'bogus' } });
+  await assert.rejects(A.auth.getAccessToken(), LoginExpiredError);
+  assert.equal(await store.get(T, 'login_expired'), undefined, 'no persistent flag');
+  const calls = A.tokenCalls();
+  await assert.rejects(A.auth.getAccessToken(), LoginExpiredError);
+  assert.equal(A.tokenCalls(), calls, 'same seed fails fast in this process');
+
+  const B = await setup({ fake, store, box, env: { ...base, GOTO_REFRESH_TOKEN: 'refresh-1' } });
+  assert.equal(typeof (await B.auth.getAccessToken()), 'string');
+  assert.equal((await B.auth.status()).refreshSource, 'seeded-from-env');
+});
+
+test('token endpoint non-2xx: error reports status and OAuth error code only', async () => {
+  const { auth, connect, clock, fake } = await setup();
+  await connect();
+  clock.t += 3600_000;
+  fake.failNext('POST', '/oauth/token', 404, {
+    error: 'invalid_request',
+    echoed: 'grant_type=refresh_token&refresh_token=refresh-1',
+  });
+  await assert.rejects(auth.getAccessToken(), (err: unknown) => {
+    assert.ok(err instanceof GoToApiError);
+    assert.equal(err.body, 'GoTo token endpoint returned 404 (error: invalid_request)');
+    assert.ok(!`${err.message} ${err.body}`.includes('refresh-1'));
+    return true;
+  });
+  fake.failNext('POST', '/oauth/token', 404, 'refresh_token=refresh-1');
+  await assert.rejects(auth.getAccessToken(), (err: unknown) => {
+    assert.ok(err instanceof GoToApiError);
+    assert.equal(err.body, 'GoTo token endpoint returned 404');
+    return true;
+  });
+});
+
+test('http: a malformed 2xx body is not echoed into the error', async () => {
+  const { auth, connect, fake } = await setup();
+  await connect();
+  fake.route('GET', '/garbled', () => ({ status: 200, body: 'not json +18015550123 hi Bob' }));
+  const http = createGoToHttp({
+    apiBaseUrl: fake.url,
+    fetch: (url, init) => fetch(url, init),
+    getToken: () => auth.getAccessToken(),
+    forceRefresh: () => auth.forceRefresh(),
+  });
+  await assert.rejects(http.json('GET', '/garbled'), (err: unknown) => {
+    assert.ok(err instanceof GoToApiError);
+    assert.equal(err.body, 'Malformed JSON response');
+    assert.ok(!`${err.message} ${err.body}`.includes('8015550123'));
+    return true;
+  });
 });
 
 // Holds refresh_token grants until release(), so a test can change the store mid-refresh.
