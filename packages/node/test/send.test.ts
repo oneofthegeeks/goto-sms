@@ -377,6 +377,22 @@ test('a seeded GOTO_REFRESH_TOKEN with no stored login can still send', async ()
   assert.equal(fake.sent.length, 1);
 });
 
+test('a garbled 2xx token answer is rejected (not uncertain) and not deduped', async () => {
+  const { make, fake, clock, posts, store } = await setup();
+  clock.t += 2 * 3600_000; // the next send must refresh first
+  fake.failNext('POST', '/oauth/token', 200, 'not json');
+  const sender = make();
+  const r = await sender.send(TO, 'hello', { dedupeKey: 'g' });
+  assert.equal(r.status, 'rejected');
+  assert.equal(r.retryable, true);
+  assert.equal(posts(), 0);
+  assert.equal(await store.get(T, 'dedupe:g'), undefined);
+  const retried = await sender.send(TO, 'hello', { dedupeKey: 'g' });
+  assert.equal(retried.status, 'sent');
+  assert.equal(retried.deduped, undefined);
+  assert.equal(fake.sent.length, 1);
+});
+
 test('token fetch failing before the send → rejected and retryable, nothing posted', async () => {
   const { make, fake, clock, posts } = await setup();
   clock.t += 2 * 3600_000; // access token expired: the next send must refresh first
