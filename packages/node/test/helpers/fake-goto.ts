@@ -163,6 +163,12 @@ export async function startFakeGoTo(
     return { status: 200, body: { items, ...(more ? { nextPageMarker: String(index + 1) } : {}) } };
   });
 
+  // --- API: send a text (swu-ideas sendSms). Only accepted sends land in `sent`. ---
+  fake.route('POST', '/messaging/v1/messages', (req) => {
+    fake.sent.push(JSON.parse(req.body) as FakeGoTo['sent'][number]);
+    return { status: 200, body: { id: `msg-${fake.sent.length}` } };
+  });
+
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);

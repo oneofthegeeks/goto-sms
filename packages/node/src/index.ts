@@ -13,3 +13,8 @@ export { createGoToHttp } from './http.js';
 export type { GoToHttp } from './http.js';
 export { listAccounts, listNumbers } from './directory.js';
 export type { GoToAccount, GoToNumber } from './directory.js';
+export { OptOuts } from './optouts.js';
+export type { OptOutSource } from './optouts.js';
+export { MessageLog } from './log.js';
+export { Sender } from './send.js';
+export type { SenderOptions } from './send.js';
