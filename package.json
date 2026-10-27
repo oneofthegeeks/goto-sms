@@ -1,0 +1,22 @@
+{
+  "name": "goto-sms-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/node"
+  ],
+  "scripts": {
+    "build": "npm -w packages/node run build",
+    "typecheck": "tsc -p packages/node --noEmit",
+    "lint": "oxlint --type-aware && prettier --check .",
+    "test": "npm -w packages/node test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "oxlint": "latest",
+    "oxlint-tsgolint": "latest",
+    "prettier": "^3.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0"
+  }
+}
