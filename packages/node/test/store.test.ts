@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, symlink, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runStoreConformance } from '../src/store/conformance.js';
@@ -59,6 +59,24 @@ test('FileStore: atomic write leaves no .tmp file behind', async () => {
   await store.set('t', 'b', 2);
   await Promise.all([store.set('t', 'c', 3), store.delete('t', 'a')]);
   assert.deepEqual(await readdir(dir), ['goto-sms.json']);
+});
+
+test('FileStore: ignores a symlink planted at the legacy fixed .tmp path', async () => {
+  const dir = await freshDir();
+  const path = join(dir, 'goto-sms.json');
+  const victim = join(dir, 'victim.txt');
+  await writeFile(victim, 'untouched');
+  await symlink(victim, `${path}.tmp`);
+  const store = new FileStore({ path });
+  await store.set('t', 'k', 1);
+  await store.set('t', 'k', 2);
+  assert.equal(await readFile(victim, 'utf8'), 'untouched');
+  // Only the planted symlink may remain; no leftover tmp files from the store itself.
+  assert.deepEqual(
+    (await readdir(dir)).filter((f) => f.endsWith('.tmp')),
+    ['goto-sms.json.tmp'],
+  );
+  assert.equal(await new FileStore({ path }).get('t', 'k'), 2);
 });
 
 test('FileStore: file is created with mode 0600', async () => {
