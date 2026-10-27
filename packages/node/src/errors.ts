@@ -16,8 +16,14 @@ export class LoginExpiredError extends GoToSmsError {
 }
 
 export class TemporaryError extends GoToSmsError {
-  constructor(message = 'Temporary failure') {
+  /**
+   * True when the API request had already gone out (network error or timeout after
+   * sending), so it may have taken effect. Absent when it never left (e.g. no token).
+   */
+  readonly requestSent?: boolean;
+  constructor(message = 'Temporary failure', o: { requestSent?: boolean } = {}) {
     super(message, 'temporary');
+    if (o.requestSent !== undefined) this.requestSent = o.requestSent;
   }
 }
 
