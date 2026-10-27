@@ -17,6 +17,7 @@ import { DEFAULT_REPLIES, detectKeyword } from '../src/inbound/keywords.js';
 import { InboundProcessor } from '../src/inbound/processor.js';
 import type { GoToSmsStore, Json } from '../src/store/types.js';
 import type { InboundMessage, Logger } from '../src/types.js';
+import { GoToSmsError } from '../src/errors.js';
 import { startFakeGoTo, type FakeGoTo } from './helpers/fake-goto.js';
 
 const T = 't1';
@@ -40,6 +41,7 @@ async function setup(
     clock?: { t: number };
     emit?: (m: InboundMessage) => void;
     connect?: boolean;
+    optOuts?: typeof OptOuts;
   } = {},
 ) {
   let fake = o.fake;
@@ -70,7 +72,7 @@ async function setup(
     getToken: () => auth.getAccessToken(),
     forceRefresh: () => auth.forceRefresh(),
   });
-  const optOuts = new OptOuts(store, T, now);
+  const optOuts = new (o.optOuts ?? OptOuts)(store, T, now);
   const log = new MessageLog(store, T, now);
   const sender = new Sender({
     http,
@@ -386,6 +388,65 @@ test("handler that throws doesn't stop processing", async () => {
   assert.equal(await s.proc.replayPending(), 0);
   const second = await s.receive('second');
   assert.deepEqual(seen, [second.id]);
+});
+
+test('keyword replies are capped at one per keyword per number per hour', async () => {
+  const s = await setup();
+  for (let i = 0; i < 5; i++) await s.receive('HELP');
+  for (let i = 0; i < 5; i++) await s.receive('STOP');
+  assert.equal(s.repliesTo(DEFAULT_REPLIES.help).length, 1);
+  assert.equal(s.repliesTo(DEFAULT_REPLIES.stop).length, 1);
+  assert.equal(s.fake.sent.length, 2);
+  // All ten were processed and logged; the opt-out still applied.
+  assert.equal((await s.inboundLog()).length, 10);
+  assert.equal(s.emitted.length, 10);
+  assert.equal(await s.optOuts.has(PEER), true);
+
+  // A new hour allows a new confirmation.
+  s.clock.t += HOUR;
+  await s.receive('STOP');
+  assert.equal(s.repliesTo(DEFAULT_REPLIES.stop).length, 2);
+});
+
+test('a STOP persisted without receivedAt or to still opts out', async () => {
+  const s = await setup();
+  const m = { id: 'bare-1', from: PEER, text: 'STOP', raw: {} } as unknown as InboundMessage;
+  assert.equal(await s.proc.persist(m), true);
+  await s.proc.process('bare-1');
+  assert.equal(await s.optOuts.has(PEER), true);
+  assert.equal(s.emitted[0]?.to, '');
+  assert.equal(s.emitted[0]?.receivedAt, new Date(s.clock.t).toISOString());
+});
+
+test('persist rejects a message without id, from or text', async () => {
+  const s = await setup();
+  for (const bad of [
+    { id: 'x', text: 'STOP' },
+    { id: 'x', from: '', text: 'STOP' },
+    { from: PEER, text: 'STOP' },
+    { id: 'x', from: PEER },
+  ]) {
+    await assert.rejects(
+      s.proc.persist(bad as unknown as InboundMessage),
+      (e: unknown) => e instanceof GoToSmsError && e.code === 'invalid_inbound',
+    );
+  }
+  assert.equal((await s.store.list(T, 'inbound:pending:')).length, 0);
+});
+
+test('START reply does not bypass an opt-out that came back before the reply', async () => {
+  // A STOP lands between START's opt-out removal and its reply.
+  class RacyOptOuts extends OptOuts {
+    override async remove(e164: string): Promise<void> {
+      await super.remove(e164);
+      await super.add(e164, 'keyword');
+    }
+  }
+  const s = await setup({ optOuts: RacyOptOuts });
+  await s.optOuts.add(PEER, 'keyword');
+  await s.receive('START');
+  assert.equal(s.repliesTo(DEFAULT_REPLIES.start).length, 0);
+  assert.equal(s.emitted[0]?.keyword, 'START');
 });
 
 test('a failed reply does not block the opt-out or the emit', async () => {

@@ -1,3 +1,4 @@
+import { GoToSmsError } from '../errors.js';
 import { errorName } from '../http.js';
 import { PRUNE_EVERY, type MessageLog } from '../log.js';
 import type { OptOuts } from '../optouts.js';
@@ -36,25 +37,26 @@ const last4 = (phone: string): string => phone.replace(/\D/g, '').slice(-4);
 const isObject = (v: Json | undefined): v is { [k: string]: Json } =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** A stored pending row back to a message; undefined if it isn't one. */
-function fromRow(v: Json | undefined): Omit<InboundMessage, 'keyword'> | undefined {
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v !== '';
+
+/**
+ * A stored pending row back to a message; undefined if it isn't one. Only id, from and text
+ * are required (what keyword handling needs), so a STOP is never dropped over a missing
+ * `to` or `receivedAt`. `fallbackAt` is used if a row somehow lacks `receivedAt`.
+ */
+function fromRow(
+  v: Json | undefined,
+  fallbackAt: string,
+): Omit<InboundMessage, 'keyword'> | undefined {
   if (!isObject(v)) return undefined;
   const { id, from, to, text, receivedAt, accountKey } = v;
-  if (
-    typeof id !== 'string' ||
-    typeof from !== 'string' ||
-    typeof to !== 'string' ||
-    typeof text !== 'string' ||
-    typeof receivedAt !== 'string'
-  ) {
-    return undefined;
-  }
+  if (!nonEmpty(id) || !nonEmpty(from) || !nonEmpty(text)) return undefined;
   return {
     id,
     from,
-    to,
+    to: typeof to === 'string' ? to : '',
     text,
-    receivedAt,
+    receivedAt: typeof receivedAt === 'string' ? receivedAt : fallbackAt,
     ...(typeof accountKey === 'string' ? { accountKey } : {}),
     raw: v.raw ?? null,
   };
@@ -78,17 +80,26 @@ export class InboundProcessor {
     this.seenRetentionDays = o.seenRetentionDays ?? DEFAULT_SEEN_RETENTION_DAYS;
   }
 
-  /** Stores the message as pending. False if this GoTo id was already seen or is pending. */
+  /**
+   * Stores the message as pending. False if this GoTo id was already seen or is pending.
+   * Throws `invalid_inbound` when id, from or text is missing, so the caller doesn't
+   * acknowledge a message that couldn't be stored.
+   */
   async persist(m: Omit<InboundMessage, 'keyword'>): Promise<boolean> {
-    const { store, tenant } = this.o;
+    const { store, tenant, now } = this.o;
+    // Checked at runtime: the message comes from a parsed GoTo payload, not typed code.
+    if (!nonEmpty(m.id) || !nonEmpty(m.from) || !nonEmpty(m.text)) {
+      throw new GoToSmsError('Inbound text is missing its id, sender or body', 'invalid_inbound');
+    }
     if ((await store.get(tenant, SEEN_PREFIX + m.id)) !== undefined) return false;
     // Fields are picked one by one: the row must be pure JSON (no undefined values).
     const row: Json = {
       id: m.id,
       from: m.from,
-      to: m.to,
+      // `to` and `receivedAt` are optional in practice; default them so the row is complete.
+      to: typeof m.to === 'string' ? m.to : '',
       text: m.text,
-      receivedAt: m.receivedAt,
+      receivedAt: typeof m.receivedAt === 'string' ? m.receivedAt : new Date(now()).toISOString(),
       ...(m.accountKey !== undefined ? { accountKey: m.accountKey } : {}),
       // GoTo's payload is parsed JSON, so it is stored as-is.
       raw: (m.raw ?? null) as Json,
@@ -167,7 +178,7 @@ export class InboundProcessor {
       await store.delete(tenant, pendingKey);
       return;
     }
-    const msg = fromRow(row);
+    const msg = fromRow(row, new Date(now()).toISOString());
     if (!msg) {
       // Unreadable row: drop it rather than fail on it at every replay.
       logger.warn('goto-sms: dropped a malformed pending inbound row');
@@ -215,8 +226,9 @@ export class InboundProcessor {
    * retried), then sends the reply. A failed reply is only logged.
    */
   private async applyKeyword(keyword: Keyword, msg: Omit<InboundMessage, 'keyword'>) {
-    const { optOuts, replies, logger } = this.o;
-    if (normalizePhone(msg.from) === null) {
+    const { optOuts, replies, logger, now } = this.o;
+    const from = normalizePhone(msg.from);
+    if (from === null) {
       // OptOuts can't store a number it can't normalize; failing here would make the row
       // fail at every replay. There's nothing to opt out and no number to reply to.
       logger.warn(`goto-sms: ${keyword} from unusable number …${last4(msg.from)}; ignored`);
@@ -228,12 +240,18 @@ export class InboundProcessor {
     const text =
       keyword === 'STOP' ? replies.stop : keyword === 'START' ? replies.start : replies.help;
     try {
-      // bypassOptOut: STOP's confirmation goes to a number that just opted out, and carriers
-      // require HELP to be answered even for opted-out numbers. The dedupeKey stops a second
-      // reply when this message is replayed after a crash.
+      // bypassOptOut only for STOP (its confirmation goes to a number that just opted out)
+      // and HELP (carriers require it answered even for opted-out numbers). START must not
+      // bypass: if a STOP landed after the removal above, the START reply must not go out.
+      //
+      // The dedupeKey allows one reply per keyword per number per clock hour, so a flood of
+      // keyword texts can't be used to make us send unlimited texts. It also covers a replay
+      // after a crash. Trade-off: STOP→START→STOP within one hour gets only the first STOP
+      // confirmation (and one START reply); the opt-out state is still applied every time.
+      const hour = Math.floor(now() / HOUR_MS);
       const r = await this.o.sender.send(msg.from, text, {
-        bypassOptOut: true,
-        dedupeKey: `reply:${msg.id}`,
+        bypassOptOut: keyword !== 'START',
+        dedupeKey: `reply:${from}:${keyword}:${hour}`,
       });
       if (r.status !== 'sent') {
         logger.warn(`goto-sms: ${keyword} reply not sent: ${r.status}`);
