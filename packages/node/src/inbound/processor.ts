@@ -111,11 +111,21 @@ export class InboundProcessor {
     }
   }
 
-  /** Processes every pending message (oldest key first). Returns how many were handled. */
+  /** Processes every pending message in arrival order. Returns how many were handled. */
   async replayPending(): Promise<number> {
     const { store, tenant, logger } = this.o;
+    // Keys sort by GoTo id, which isn't time order. Order matters: a START then a STOP
+    // from one number must end opted out, so replay by receivedAt (unreadable rows last,
+    // where handle() drops them), with the key as a stable tie-break.
+    const arrival = (v: Json): number => {
+      const t = isObject(v) && typeof v.receivedAt === 'string' ? Date.parse(v.receivedAt) : NaN;
+      return Number.isNaN(t) ? Infinity : t;
+    };
+    const pending = (await store.list(tenant, PENDING_PREFIX))
+      .map((e) => ({ key: e.key, at: arrival(e.value) }))
+      .sort((a, b) => a.at - b.at || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     let count = 0;
-    for (const { key } of await store.list(tenant, PENDING_PREFIX)) {
+    for (const { key } of pending) {
       try {
         await this.process(key.slice(PENDING_PREFIX.length));
         count++;

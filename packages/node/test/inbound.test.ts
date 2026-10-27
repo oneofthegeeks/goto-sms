@@ -333,6 +333,23 @@ test('pending inbound replayed after restart', async () => {
   assert.equal(B.emitted.length + C.emitted.length, 1);
 });
 
+test('replay applies pending keywords in arrival order, not id order', async () => {
+  const s = await setup();
+  // 'g-10' sorts before 'g-2' by key, but the STOP arrived last and must win.
+  await s.proc.persist(
+    s.msg('START', { id: 'g-2', receivedAt: new Date(s.clock.t).toISOString() }),
+  );
+  await s.proc.persist(
+    s.msg('STOP', { id: 'g-10', receivedAt: new Date(s.clock.t + 1000).toISOString() }),
+  );
+  assert.equal(await s.proc.replayPending(), 2);
+  assert.equal(await s.optOuts.has(PEER), true);
+  assert.deepEqual(
+    s.emitted.map((m) => m.id),
+    ['g-2', 'g-10'],
+  );
+});
+
 test('duplicate GoTo id emitted once', async () => {
   const s = await setup();
   const m = s.msg('hi');
