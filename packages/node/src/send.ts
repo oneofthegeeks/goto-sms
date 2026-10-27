@@ -8,7 +8,7 @@ import {
   SendFailedError,
   TemporaryError,
 } from './errors.js';
-import { errorName, type GoToHttp } from './http.js';
+import { errorName, MALFORMED_API_RESPONSE, type GoToHttp } from './http.js';
 import type { MessageLog } from './log.js';
 import type { GoToAuth } from './oauth.js';
 import type { OptOuts } from './optouts.js';
@@ -84,8 +84,14 @@ function translate(err: unknown): SendResult {
   }
   if (err instanceof GoToApiError) {
     const { status, body } = err;
-    // A 2xx whose body didn't parse: GoTo most likely accepted the text.
-    if (status >= 200 && status < 300) return { status: 'uncertain', reason: R.unreadableAnswer };
+    if (status >= 200 && status < 300) {
+      // The send endpoint answered 2xx with a body that didn't parse: GoTo most likely
+      // accepted the text. Any other 2xx error is the token endpoint's garbled answer,
+      // raised before the POST left, so the text was not sent.
+      return body === MALFORMED_API_RESPONSE
+        ? { status: 'uncertain', reason: R.unreadableAnswer }
+        : { status: 'rejected', reason: R.noToken, retryable: true };
+    }
     // GoTo reports 10DLC problems under several statuses, so the body is checked first.
     if (/10dlc|campaign/i.test(body)) return { status: 'rejected', reason: R.tenDlc };
     if (status === 403) return { status: 'rejected', reason: R.forbidden };
