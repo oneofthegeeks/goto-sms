@@ -1,5 +1,6 @@
 import { readFileSync, renameSync } from 'node:fs';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { Logger } from '../types.js';
 import { MemoryStore } from './memory.js';
@@ -90,10 +91,17 @@ export class FileStore extends MemoryStore {
     const write = async (): Promise<void> => {
       const snapshot: Snapshot = {};
       for (const [tenant, bucket] of this.data) snapshot[tenant] = Object.fromEntries(bucket);
-      const tmp = `${this.path}.tmp`;
+      // Unique name + O_EXCL ('wx'): never follows or overwrites a file/symlink planted at the tmp
+      // path, and mode 0600 is guaranteed because the file is always freshly created.
+      const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
       await mkdir(dirname(this.path), { recursive: true });
-      await writeFile(tmp, JSON.stringify(snapshot), { mode: 0o600 });
-      await rename(tmp, this.path);
+      try {
+        await writeFile(tmp, JSON.stringify(snapshot), { flag: 'wx', mode: 0o600 });
+        await rename(tmp, this.path);
+      } catch (err) {
+        await unlink(tmp).catch(() => {});
+        throw err;
+      }
     };
     const result = this.chain.then(write);
     // A failed write must not wedge later writes; the caller still sees the error via `result`.
