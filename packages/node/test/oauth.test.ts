@@ -36,6 +36,7 @@ async function setup(
     box?: SecretBox;
     timeoutMs?: number;
     fake?: FakeGoTo;
+    fetch?: typeof fetch;
   } = {},
 ) {
   const fake = o.fake ?? (await startFakeGoTo());
@@ -50,7 +51,7 @@ async function setup(
       tenant: T,
       box,
       config: new ConfigResolver({ store, tenant: T, box, options: {}, env }),
-      fetch: (url, init) => fetch(url, init),
+      fetch: (url, init) => (o.fetch ?? fetch)(url, init),
       authBaseUrl: fake.url,
       redirectUri: REDIRECT,
       now: () => clock.t,
@@ -478,4 +479,59 @@ test('http: timeout → TemporaryError with requestSent; token errors pass throu
     assert.equal(err.requestSent, undefined);
     return true;
   });
+});
+
+test('a refused new env seed is remembered: later calls fail fast', async () => {
+  const fake = await startFakeGoTo();
+  cleanups.push(() => fake.close());
+  const store = new MemoryStore();
+  const box = new SecretBox(randomBytes(32));
+  const base = { GOTO_CLIENT_ID: 'cid', GOTO_CLIENT_SECRET: 'csecret' };
+  const A = await setup({ fake, store, box, env: { ...base, GOTO_REFRESH_TOKEN: 'refresh-1' } });
+  await A.auth.getAccessToken();
+
+  const B = await setup({ fake, store, box, env: { ...base, GOTO_REFRESH_TOKEN: 'bogus' } });
+  await assert.rejects(B.auth.getAccessToken(), LoginExpiredError);
+  assert.equal(await store.get(T, 'login_expired'), true);
+  const calls = B.tokenCalls();
+  await assert.rejects(B.auth.getAccessToken(), LoginExpiredError);
+  assert.equal(B.tokenCalls(), calls, 'the same bad seed is not retried');
+});
+
+// Holds refresh_token grants until release(), so a test can change the store mid-refresh.
+function gatedRefreshFetch() {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const gated: typeof fetch = async (url, init) => {
+    if (String(init?.body ?? '').includes('grant_type=refresh_token')) await gate;
+    return fetch(url, init);
+  };
+  return { gated, release };
+}
+
+test('CAS loss: a login during a refresh wins and the refresh returns its token', async () => {
+  const { gated, release } = gatedRefreshFetch();
+  const { auth, connect, clock, store, box } = await setup({ fetch: gated });
+  await connect();
+  clock.t += 3600_000;
+  const pending = auth.getAccessToken();
+  await new Promise((r) => setTimeout(r, 20)); // let the refresh reach the gate
+  await connect(); // a fresh login replaces tokens mid-refresh
+  const login = (await store.get(T, 'tokens')) as { access: string };
+  release();
+  assert.equal(await pending, box.open(login.access));
+  assert.deepEqual(await store.get(T, 'tokens'), login, "the refresh didn't overwrite the login");
+});
+
+test('CAS loss: a disconnect during a refresh wins', async () => {
+  const { gated, release } = gatedRefreshFetch();
+  const { auth, connect, clock, store } = await setup({ fetch: gated });
+  await connect();
+  clock.t += 3600_000;
+  const pending = auth.getAccessToken();
+  await new Promise((r) => setTimeout(r, 20));
+  await auth.disconnect();
+  release();
+  await assert.rejects(pending, NotConfiguredError);
+  assert.equal(await store.get(T, 'tokens'), undefined);
 });
