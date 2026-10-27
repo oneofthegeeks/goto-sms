@@ -11,3 +11,5 @@ export type { ConfigField, Source, ResolvedConfig } from './config.js';
 export { GoToAuth } from './oauth.js';
 export { createGoToHttp } from './http.js';
 export type { GoToHttp } from './http.js';
+export { listAccounts, listNumbers } from './directory.js';
+export type { GoToAccount, GoToNumber } from './directory.js';
