@@ -8,3 +8,6 @@ export { SqliteStore } from './store/sqlite.js';
 export { SecretBox, resolveEncryptionKey } from './secrets.js';
 export { ConfigResolver } from './config.js';
 export type { ConfigField, Source, ResolvedConfig } from './config.js';
+export { GoToAuth } from './oauth.js';
+export { createGoToHttp } from './http.js';
+export type { GoToHttp } from './http.js';
