@@ -1,0 +1,8 @@
+node_modules/
+dist/
+data/
+.env
+*.db
+*.sqlite
+test-results/
+.superpowers/
