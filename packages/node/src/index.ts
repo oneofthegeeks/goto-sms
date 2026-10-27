@@ -18,3 +18,6 @@ export type { OptOutSource } from './optouts.js';
 export { MessageLog } from './log.js';
 export { Sender } from './send.js';
 export type { SenderOptions } from './send.js';
+export { detectKeyword } from './inbound/keywords.js';
+export type { KeywordReplies } from './inbound/keywords.js';
+export { InboundProcessor } from './inbound/processor.js';
