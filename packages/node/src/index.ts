@@ -5,3 +5,4 @@ export type { GoToSmsStore, Json } from './store/types.js';
 export { MemoryStore } from './store/memory.js';
 export { FileStore } from './store/file.js';
 export { SqliteStore } from './store/sqlite.js';
+export { SecretBox, resolveEncryptionKey } from './secrets.js';

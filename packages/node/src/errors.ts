@@ -47,3 +47,10 @@ export class SendFailedError extends GoToSmsError {
     this.result = result;
   }
 }
+
+/** A sealed secret could not be opened: wrong key, tampering, or a malformed string. */
+export class DecryptError extends GoToSmsError {
+  constructor(message = 'Could not decrypt stored secret (wrong key or corrupted data)') {
+    super(message, 'decrypt_failed');
+  }
+}
