@@ -31,6 +31,15 @@
     "dist"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oneofthegeeks/goto-sms.git",
+    "directory": "packages/node"
+  },
+  "homepage": "https://github.com/oneofthegeeks/goto-sms/tree/main/packages/node#readme",
+  "bugs": {
+    "url": "https://github.com/oneofthegeeks/goto-sms/issues"
+  },
   "engines": {
     "node": ">=20"
   },
