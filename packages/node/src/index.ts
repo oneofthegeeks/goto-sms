@@ -27,3 +27,14 @@ export {
   checkWebhookSecret,
   parseWebhookEnvelope,
 } from './inbound/webhook.js';
+export { Poller } from './inbound/poller.js';
+export type { PollerOptions } from './inbound/poller.js';
+export { createGoToSms } from './client.js';
+export type {
+  GoToSms,
+  GoToSmsOptions,
+  GoToSmsStatus,
+  IncomingMode,
+  Core,
+  ResolvedOptions,
+} from './client.js';

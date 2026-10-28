@@ -181,6 +181,42 @@ export async function startFakeGoTo(
     return { status: 200, body: { id: `msg-${fake.sent.length}` } };
   });
 
+  // --- API: polling (geeks-tracker fetchInbound). Both read `fake.inbound`, filtered by
+  // owner number and oldestTimestamp (compared with Date.parse, like GoTo's mixed precision).
+  const since = (req: FakeRequest) => Date.parse(req.query.get('oldestTimestamp') ?? '') || 0;
+  const forOwner = (req: FakeRequest) =>
+    fake.inbound.filter(
+      (m) => m.to === req.query.get('ownerPhoneNumber') && Date.parse(m.timestamp) >= since(req),
+    );
+  fake.route('GET', '/messaging/v1/conversations', (req) => {
+    const last = new Map<string, string>();
+    for (const m of forOwner(req)) {
+      const prev = last.get(m.from);
+      if (!prev || Date.parse(m.timestamp) > Date.parse(prev)) last.set(m.from, m.timestamp);
+    }
+    const items = [...last].map(([contact, lastMessageTimestamp]) => ({
+      contactPhoneNumbers: [contact],
+      lastMessageTimestamp,
+    }));
+    return { status: 200, body: { items } };
+  });
+  fake.route('GET', '/messaging/v1/messages', (req) => {
+    // Served in reverse order on purpose: callers must sort, not trust the API's order.
+    const items = forOwner(req)
+      .filter((m) => m.from === req.query.get('contactPhoneNumber'))
+      .map((m) => ({
+        id: m.id,
+        direction: 'IN',
+        authorPhoneNumber: m.from,
+        ownerPhoneNumber: m.to,
+        contactPhoneNumber: m.from,
+        body: m.body,
+        timestamp: m.timestamp,
+      }))
+      .reverse();
+    return { status: 200, body: { items } };
+  });
+
   // --- API: notification channels + subscriptions (party-invites subscribeInbound) ---
   fake.route('GET', '/notification-channel/v1/channels', () => ({
     status: 200,
