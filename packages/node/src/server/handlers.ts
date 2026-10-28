@@ -153,7 +153,13 @@ async function setIncoming(core: Core, mode: IncomingMode): Promise<void> {
   }
   // Leaving webhook mode deletes the subscription and rotates the secret, so the old URL
   // stops authenticating. A failed DELETE throws here and the mode stays as it was.
-  if ((await core.incomingMode()) === 'webhook') await disableWebhook({ http, store, tenant });
+  const fromWebhook = (await core.incomingMode()) === 'webhook';
+  if (fromWebhook) await disableWebhook({ http, store, tenant });
+  // R31: the webhook covered the time since polling last ran, so polling starts from now
+  // (re-reading that span would replay texts the webhook already handled). Coming from off,
+  // the cursor is kept: nothing handled texts then, and the poller caps the lookback at 24 h.
+  // Set before start(), which polls straight away.
+  if (mode === 'polling' && fromWebhook) await poller.resetCursor();
   await store.set(tenant, 'inbound:mode', mode);
   if (mode === 'polling') poller.start();
   else poller.stop();

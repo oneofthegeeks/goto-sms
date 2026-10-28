@@ -118,7 +118,9 @@ the setup page.
   `sms.webhookRouter()` mounts only this route and needs no `authorize`.
 - **Polling** (works anywhere, including localhost). Every 30 s the package lists conversations and
   their messages. It only runs while your process is up, and catches up from its cursor on start.
-  The first poll looks back 5 minutes. Note: the polling endpoints are modeled on GoTo's
+  The first poll looks back 5 minutes, and no poll ever reads more than 24 hours back: after a
+  longer gap the older texts are skipped and an error is logged. Switching from webhook to polling
+  starts from now. Note: the polling endpoints are modeled on GoTo's
   documentation and another app, and have **not yet been verified against live GoTo**.
 
 ## STOP / START / HELP
