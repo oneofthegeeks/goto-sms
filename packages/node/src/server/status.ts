@@ -27,7 +27,8 @@ export interface IncomingError {
 
 /**
  * Never carries the client secret, tokens or the refresh token (C22). The webhook secret
- * appears only inside `incoming.webhookUrl`, which the authorized admin needs to see.
+ * appears only inside `incoming.webhookUrl`, which only the authorized GET /api/status
+ * includes; programmatic `sms.status()` omits it (R30).
  */
 export interface StatusPayload {
   version: string;
@@ -49,6 +50,7 @@ export interface StatusPayload {
   redirectUri: string;
   incoming: {
     mode: IncomingMode;
+    /** Only in GET /api/status (behind authorize), never from sms.status(): it holds the secret. */
     webhookUrl?: string;
     /** publicUrl is https. */
     canWebhook: boolean;
@@ -93,12 +95,14 @@ const UNSET: Record<ConfigField, Source> = {
 
 /**
  * Without a core (startup failed, e.g. for lack of configuration) everything reads as not set
- * up, with `startupError` saying why.
+ * up, with `startupError` saying why. `includeWebhookUrl` is for the authorized HTTP route
+ * only; off by default so no other caller can leak the webhook secret.
  */
 export async function buildStatus(
   options: ResolvedOptions,
   core?: Core,
   startupError?: string,
+  o: { includeWebhookUrl?: boolean } = {},
 ): Promise<StatusPayload> {
   const base = {
     version: VERSION,
@@ -123,7 +127,10 @@ export async function buildStatus(
   const auth = await core.auth.status();
   const r = await core.config.resolve();
   const mode = await core.incomingMode();
-  const secret = mode === 'webhook' ? await getWebhookSecret(core.store, core.tenant) : undefined;
+  const secret =
+    o.includeWebhookUrl && mode === 'webhook'
+      ? await getWebhookSecret(core.store, core.tenant)
+      : undefined;
   const webhookUrl = secret ? core.webhookUrl(secret) : undefined;
   const configured = Boolean(r.clientId && r.clientSecret) && !r.credentialsUnreadable;
   const error = asIncomingError(await core.store.get(core.tenant, INBOUND_ERROR));

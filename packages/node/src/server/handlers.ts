@@ -307,7 +307,8 @@ function dispatcher(options: ResolvedOptions, logger: Logger, t: RouteTable): Ha
 
 /** The routes of a started instance. */
 function liveHandlers(core: Core, setupHtml: string): Handler {
-  const status = () => buildStatus(core.options, core);
+  // Behind authorize, so this is the one place the webhook URL (and its secret) is shown.
+  const status = () => buildStatus(core.options, core, undefined, { includeWebhookUrl: true });
   const ok = (json: unknown): HttpResponse => ({ status: 200, json });
 
   const routes: Record<string, Handler> = {

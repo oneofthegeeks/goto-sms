@@ -78,8 +78,10 @@ info level or above.
 ## Secrets in responses
 
 No response ever contains the client secret, an access token, or the refresh token. The webhook
-secret appears in exactly one place: `incoming.webhookUrl` in the status payload, which only the
-authorized admin can fetch and which the page shows so the admin can see where GoTo delivers.
+secret appears in exactly one place: `incoming.webhookUrl` in the status payload of the HTTP routes,
+which only the authorized admin can fetch and which the page shows so the admin can see where GoTo
+delivers. A package's programmatic status call (Node: `sms.status()`) returns the same payload
+**without** `incoming.webhookUrl`, because hosts may expose it without authorization.
 
 ## Status payload
 
@@ -108,7 +110,7 @@ Returned by `GET /api/status` and by every state-changing route marked "returns 
   "redirectUri": "https://x.example/goto-sms/callback", // "" without a publicUrl
   "incoming": {
     "mode": "webhook", // "webhook" | "polling" | "off"
-    "webhookUrl": "https://x.example/goto-sms/inbound/<secret>", // only in webhook mode
+    "webhookUrl": "https://x.example/goto-sms/inbound/<secret>", // only in webhook mode, only over HTTP
     "canWebhook": true, // publicUrl is https
     "error": { "error": "goto_api", "message": "GoTo API error 403", "gotoStatus": 403 }, // optional, see below
   },
