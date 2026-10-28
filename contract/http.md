@@ -12,11 +12,15 @@ implements exactly this. The Node reference is `packages/node/src/server/handler
   `https://x.example` mounted at `/admin/tools/sms` gives
   `https://x.example/admin/tools/sms/callback`.
 - The webhook URL is `publicUrl + mountPath + "/inbound/" + secret`.
+- `publicUrl` loses any trailing slash and `mountPath` is normalized to a leading slash with no
+  trailing slash; the root mount (`/` or empty) becomes `""`, so mounting at the root gives
+  `https://x.example/callback`, never `//callback`.
 - Request bodies are JSON objects (at most 100 kB); a missing body counts as `{}`.
 - A request for the mount itself without a trailing slash (`/goto-sms`) is redirected (`302`) to
   `./goto-sms/` (the last path segment plus `/`, query kept), so the page's relative URLs resolve
   under the mount. The Location is relative so it survives a proxy that strips a path prefix.
-- `HEAD` is answered as `GET` (headers only).
+- `HEAD` is answered as `GET` (headers only), except `HEAD /callback`, which answers `200` with no
+  body and no side effect, so a link prefetcher can't consume the single-use OAuth state.
 - JSON responses use `200` unless stated. Header names are matched case-insensitively.
 
 ## Authentication
