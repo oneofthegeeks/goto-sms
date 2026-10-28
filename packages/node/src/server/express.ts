@@ -72,7 +72,8 @@ export function buildExpressRouter(src: RouterSource, o: { inboundOnly?: boolean
 
   if (o.inboundOnly) {
     router.use((req: Request, _res: Response, next: NextFunction) => {
-      if (req.method === 'POST' && INBOUND.test(req.path)) next();
+      // OPTIONS: GoTo's URL check when the channel is created.
+      if ((req.method === 'POST' || req.method === 'OPTIONS') && INBOUND.test(req.path)) next();
       else next('router');
     });
   }

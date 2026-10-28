@@ -25,12 +25,13 @@ implements exactly this. The Node reference is `packages/node/src/server/handler
 
 ## Authentication
 
-| Route                   | `authorize(req)` | Same-origin check | Authenticated by       |
-| ----------------------- | ---------------- | ----------------- | ---------------------- |
-| `POST /inbound/:secret` | exempt           | exempt            | path secret            |
-| `GET /callback`         | exempt           | exempt            | single-use OAuth state |
-| every other `GET`       | required         | no                | host's `authorize`     |
-| every other non-`GET`   | required         | required          | host's `authorize`     |
+| Route                      | `authorize(req)` | Same-origin check | Authenticated by       |
+| -------------------------- | ---------------- | ----------------- | ---------------------- |
+| `POST /inbound/:secret`    | exempt           | exempt            | path secret            |
+| `OPTIONS /inbound/:secret` | exempt           | exempt            | path secret            |
+| `GET /callback`            | exempt           | exempt            | single-use OAuth state |
+| every other `GET`          | required         | no                | host's `authorize`     |
+| every other non-`GET`      | required         | required          | host's `authorize`     |
 
 - `authorize(req)` is a required option. It receives the host framework's raw request and returns
   (or resolves to) a boolean. `false` gives `403 {"error":"forbidden"}`.
@@ -146,7 +147,7 @@ A package exposes two mountable routers:
 
 - the full router (Node: `sms.router()`): every route below. Creating it throws without
   `authorize` (see Authentication). It can be created before startup finishes; requests wait.
-- the webhook-only router (Node: `sms.webhookRouter()`): only `POST /inbound/:secret`; every other
+- the webhook-only router (Node: `sms.webhookRouter()`): only `POST` and `OPTIONS /inbound/:secret`; every other
   request falls through to the host. It needs no `authorize`, because the webhook is exempt.
 
 ## Routes
@@ -273,6 +274,13 @@ A package exposes two mountable routers:
   `admin`.
 - Response: the opt-out list, as `GET /api/opt-outs`.
 - Errors: `400 invalid_input` (bad action or no number), `400 invalid_number`.
+
+### `OPTIONS /inbound/:secret`
+
+- GoTo sends this to the webhook URL while creating the notification channel and refuses the channel
+  (`400 Webhook URL did not respond as expected`) unless it gets a 2xx. It arrives **before** the
+  stored mode is `webhook`, so the mode is not checked.
+- Response, no body: `200` when the secret matches the stored webhook secret, else `404`.
 
 ### `POST /inbound/:secret`
 

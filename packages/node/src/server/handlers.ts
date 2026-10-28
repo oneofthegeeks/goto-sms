@@ -238,6 +238,12 @@ async function inbound(core: Core, secret: string, body: unknown): Promise<HttpR
   return { status: 204 };
 }
 
+/** OPTIONS /inbound/:secret: GoTo's reachability check on channel creation. 200 iff the secret matches. */
+async function inboundCheck(core: Core, secret: string): Promise<HttpResponse> {
+  const expected = await getWebhookSecret(core.store, core.tenant);
+  return { status: expected && checkWebhookSecret(secret, expected) ? 200 : 404 };
+}
+
 /** GET /callback: the OAuth redirect, authenticated by `state`. Always redirects to the page. */
 async function callback(core: Core, query: Record<string, string>): Promise<HttpResponse> {
   const back = (q: string): HttpResponse => ({ status: 302, redirect: `./?${q}` });
@@ -268,6 +274,7 @@ export function assertSetupAuth(options: ResolvedOptions): void {
 /** What a dispatcher needs besides the shared auth/exemption logic. */
 interface RouteTable {
   inbound(secret: string, body: unknown): Promise<HttpResponse>;
+  inboundCheck(secret: string): Promise<HttpResponse>;
   callback(query: Record<string, string>): Promise<HttpResponse>;
   routes: Record<string, Handler>;
   /** Runs when no route matched; returns undefined for a plain 404. */
@@ -286,6 +293,9 @@ function dispatcher(options: ResolvedOptions, logger: Logger, t: RouteTable): Ha
       // Exempt from authorize and the Origin check: GoTo and the OAuth redirect send neither
       // the host's session nor a same-origin header. Each carries its own secret.
       if (hook && method === 'POST') return await t.inbound(hook[1]!, req.body);
+      // GoTo checks the URL with OPTIONS while creating the channel, i.e. before the stored mode
+      // is webhook, so only the secret decides; a non-2xx makes GoTo refuse the channel.
+      if (hook && method === 'OPTIONS') return await t.inboundCheck(hook[1]!);
       if (route === 'GET /callback') return await t.callback(req.query);
 
       if (authorize && !(await authorize(req.raw))) {
@@ -389,6 +399,7 @@ function liveHandlers(core: Core, setupHtml: string): Handler {
 
   return dispatcher(core.options, core.logger, {
     inbound: (secret, body) => inbound(core, secret, body),
+    inboundCheck: (secret) => inboundCheck(core, secret),
     callback: (query) => callback(core, query),
     routes,
   });
@@ -407,6 +418,7 @@ function startupFailedHandlers(
   const startupError = startupErrorText(err);
   return dispatcher(options, logger, {
     inbound: async () => ({ status: 404 }),
+    inboundCheck: async () => ({ status: 404 }),
     callback: async () => ({ status: 302, redirect: './?error=not_configured' }),
     routes: {
       'GET /': async () => ({ status: 200, html: setupHtml }),

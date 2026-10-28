@@ -295,6 +295,18 @@ test('close() resolves only after a slow post-204 process finishes', async () =>
   assert.equal(await sms.core.store.get(sms.core.tenant, 'inbound:pending:g-close'), undefined);
 });
 
+test('OPTIONS /inbound/:secret answers 200 before webhook mode is on (GoTo validates the URL)', async () => {
+  // GoTo sends OPTIONS to the webhook URL while creating the channel, which happens before the
+  // stored mode switches to webhook; a non-2xx makes it refuse the channel (400 BAD_REQUEST).
+  const { sms, handle } = await setup();
+  const secret = 'V'.repeat(43);
+  await sms.core.store.set(sms.core.tenant, 'inbound:webhookSecret', secret);
+  const ok = await handle(req('OPTIONS', `/inbound/${secret}`));
+  assert.equal(ok.status, 200, 'right secret, mode still off');
+  const wrong = await handle(req('OPTIONS', `/inbound/${'w'.repeat(43)}`));
+  assert.equal(wrong.status, 404, 'wrong secret');
+});
+
 test('inbound bad secret → 404', async () => {
   const { sms, handle } = await setup();
   const r1 = await handle(req('POST', '/inbound/wrong', { body: envelope('g-2') }));
