@@ -35,15 +35,23 @@
     "node": ">=20"
   },
   "scripts": {
+    "embed": "node scripts/embed-setup.mjs",
+    "prebuild": "npm run embed",
     "build": "tsup",
+    "pretypecheck": "npm run embed",
+    "typecheck": "tsc -p . --noEmit",
+    "pretest": "npm run embed",
     "test": "tsx --test test/*.test.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
-    "better-sqlite3": "^13.0.3"
+    "@types/express": "^5.0.6",
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.3.0"
   },
   "peerDependencies": {
-    "better-sqlite3": "^11.0.0 || ^12.0.0 || ^13.0.0"
+    "better-sqlite3": "^11.0.0 || ^12.0.0 || ^13.0.0",
+    "express": "^4.18 || ^5"
   },
   "peerDependenciesMeta": {
     "better-sqlite3": {

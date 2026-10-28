@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="referrer" content="no-referrer" />
+    <!-- No favicon request: it would go to the host's root, outside the mount. -->
+    <link rel="icon" href="data:," />
+    <title>GoTo SMS setup</title>
+    <!-- STYLE -->
+  </head>
+  <body>
+    <header class="top">
+      <h1>GoTo SMS setup</h1>
+      <p class="muted">Connect this app to GoTo Connect so it can send and receive texts.</p>
+    </header>
+
+    <!-- Status changes are announced here for screen readers. -->
+    <div id="live" class="sr-only" aria-live="polite" role="status"></div>
+
+    <main class="grid">
+      <section id="status" class="card banner span" aria-labelledby="banner-title">
+        <h2 id="banner-title">Loading status…</h2>
+        <p id="banner-detail" class="muted"></p>
+        <button id="reconnect" type="button" hidden>Reconnect</button>
+      </section>
+
+      <section class="card" aria-labelledby="h-client">
+        <h2 id="h-client">1. GoTo OAuth client</h2>
+        <ol class="steps">
+          <li>
+            Sign in at
+            <a href="https://developer.goto.com" target="_blank" rel="noopener noreferrer"
+              >developer.goto.com</a
+            >
+            and create an OAuth client.
+          </li>
+          <li>
+            Add this redirect URI to the client:
+            <div class="copy-row">
+              <code id="redirect-uri" class="wrap"></code>
+              <button id="copy-redirect" type="button" class="secondary">Copy</button>
+            </div>
+            <p id="no-redirect" class="warn" hidden>
+              No public URL is set, so there is no redirect URI yet. Set <code>publicUrl</code> (or
+              <code>GOTO_SMS_PUBLIC_URL</code>) and restart.
+            </p>
+          </li>
+          <li>
+            Enable these scopes on the client:
+            <ul id="scopes" class="scopes"></ul>
+          </li>
+          <li>Paste the client ID and secret below.</li>
+        </ol>
+        <p class="note">
+          GoTo shows the client secret only once, when you create the client. Copy it then.
+        </p>
+        <form id="cred-form" class="form">
+          <div class="field">
+            <label for="client-id">Client ID</label>
+            <input id="client-id" name="clientId" autocomplete="off" spellcheck="false" />
+            <span id="client-id-locked" class="locked" hidden>set by config</span>
+          </div>
+          <div class="field">
+            <label for="client-secret">Client secret</label>
+            <input
+              id="client-secret"
+              name="clientSecret"
+              type="password"
+              autocomplete="new-password"
+              spellcheck="false"
+            />
+            <span id="client-secret-locked" class="locked" hidden>set by config</span>
+          </div>
+          <div class="actions">
+            <button id="save-cred" type="submit">Save</button>
+          </div>
+          <p id="cred-msg" class="msg" hidden></p>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="h-connect">
+        <h2 id="h-connect">2. Connect</h2>
+        <p class="muted">
+          Sign in to GoTo with the account that owns the numbers you want to text from. You come
+          back here afterwards.
+        </p>
+        <div class="actions">
+          <button id="connect" type="button">Connect to GoTo</button>
+          <button id="disconnect" type="button" class="secondary" hidden>Disconnect</button>
+        </div>
+        <p id="connect-msg" class="msg" hidden></p>
+      </section>
+
+      <section class="card" aria-labelledby="h-number">
+        <h2 id="h-number">3. Sending number</h2>
+        <form id="number-form" class="form">
+          <div class="field" id="account-field">
+            <label for="account">GoTo account</label>
+            <select id="account" name="accountKey"></select>
+            <span id="account-locked" class="locked" hidden>set by config</span>
+          </div>
+          <div class="field" id="number-field">
+            <label for="number">Number</label>
+            <select id="number" name="fromNumber"></select>
+          </div>
+          <div class="field" id="typed-field" hidden>
+            <label for="typed-number">Number (type it in)</label>
+            <input id="typed-number" type="tel" autocomplete="off" placeholder="+1 801 555 0100" />
+          </div>
+          <span id="number-locked" class="locked" hidden>set by config</span>
+          <p id="sms-hint" class="muted" hidden></p>
+          <div class="actions">
+            <button id="load-numbers" type="button" class="secondary">Load numbers</button>
+            <button id="save-number" type="submit">Save</button>
+          </div>
+          <p id="number-msg" class="msg" hidden></p>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="h-test">
+        <h2 id="h-test">4. Test</h2>
+        <form id="test-form" class="form">
+          <div class="field">
+            <label for="test-to">Send a test text to</label>
+            <input id="test-to" type="tel" autocomplete="tel" placeholder="(801) 555-0100" />
+          </div>
+          <div class="actions">
+            <button id="send-test" type="submit">Send test text</button>
+          </div>
+          <p id="test-msg" class="msg" hidden></p>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="h-incoming">
+        <h2 id="h-incoming">5. Incoming texts</h2>
+        <fieldset class="radios">
+          <legend>How replies reach this app</legend>
+          <label
+            ><input type="radio" name="incoming" value="webhook" /> Webhook
+            <span class="muted">(instant)</span></label
+          >
+          <label
+            ><input type="radio" name="incoming" value="polling" /> Polling
+            <span class="muted">(checks every 30 s)</span></label
+          >
+          <label><input type="radio" name="incoming" value="off" /> Off</label>
+        </fieldset>
+        <p class="note">
+          Webhooks need an https public URL, and the GoTo login you connected with must be a Super
+          Admin to create the subscription. Otherwise use Polling.
+        </p>
+        <p id="webhook-url-row" hidden>
+          GoTo delivers to <code id="webhook-url" class="wrap"></code>
+        </p>
+        <p id="incoming-msg" class="msg" hidden></p>
+      </section>
+
+      <section class="card span" aria-labelledby="h-activity">
+        <h2 id="h-activity">6. Activity</h2>
+        <div class="split">
+          <div>
+            <div class="row-head">
+              <h3>Recent messages</h3>
+              <button id="refresh-log" type="button" class="secondary">Refresh</button>
+            </div>
+            <table class="stack">
+              <caption class="sr-only">
+                The last 50 messages, newest first
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Time</th>
+                  <th scope="col">Direction</th>
+                  <th scope="col">From</th>
+                  <th scope="col">To</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Reason</th>
+                </tr>
+              </thead>
+              <tbody id="log-body"></tbody>
+            </table>
+            <p id="log-empty" class="muted">No messages yet.</p>
+          </div>
+          <div>
+            <h3>Opted out</h3>
+            <table class="stack">
+              <caption class="sr-only">
+                Numbers that won't be texted
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Number</th>
+                  <th scope="col">Since</th>
+                  <th scope="col">Source</th>
+                  <th scope="col"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody id="optout-body"></tbody>
+            </table>
+            <p id="optout-empty" class="muted">No opt-outs.</p>
+            <form id="optout-form" class="form inline">
+              <div class="field">
+                <label for="optout-number">Add a number</label>
+                <input id="optout-number" type="tel" autocomplete="off" />
+              </div>
+              <div class="actions">
+                <button type="submit" class="secondary">Add opt-out</button>
+              </div>
+            </form>
+            <p id="optout-msg" class="msg" hidden></p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      goto-sms v<span id="version">…</span> · unofficial, not affiliated with GoTo
+    </footer>
+    <!-- SCRIPT -->
+  </body>
+</html>

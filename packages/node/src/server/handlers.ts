@@ -2,7 +2,7 @@
 // GoTo webhook. A thin adapter (the Express router) maps its request/response onto these.
 // contract/http.md at the repo root is the language-neutral write-up of this file.
 import type { IncomingMessage } from 'node:http';
-import type { Core, IncomingMode } from '../client.js';
+import type { Core, IncomingMode, ResolvedOptions } from '../client.js';
 import { listAccounts, listNumbers } from '../directory.js';
 import { GoToApiError, GoToSmsError, TemporaryError } from '../errors.js';
 import { errorName } from '../http.js';
@@ -14,7 +14,8 @@ import {
   getWebhookSecret,
   parseWebhookEnvelope,
 } from '../inbound/webhook.js';
-import { buildStatus } from './status.js';
+import type { Logger } from '../types.js';
+import { buildStatus, startupErrorText } from './status.js';
 
 export { buildStatus, REQUIRED_SCOPES, type StatusPayload } from './status.js';
 
@@ -30,6 +31,7 @@ export interface HttpRequest {
   raw: IncomingMessage;
 }
 export type HttpResponse = { status: number; json?: unknown; html?: string; redirect?: string };
+export type Handler = (req: HttpRequest) => Promise<HttpResponse>;
 
 const NO_AUTHORIZE =
   'goto-sms: pass authorize(req) to createGoToSms (or allowUnauthenticatedSetup: true in development)';
@@ -92,8 +94,8 @@ function sameOrigin(req: HttpRequest, publicUrl: string | undefined): boolean {
 }
 
 /** One error → response mapping for every route. Details go to the debug log only. */
-function errorResponse(core: Core, route: string, err: unknown): HttpResponse {
-  core.logger.debug('goto-sms: setup request failed', {
+function errorResponse(logger: Logger, route: string, err: unknown): HttpResponse {
+  logger.debug('goto-sms: setup request failed', {
     route,
     error: err instanceof GoToSmsError ? err.code : errorName(err),
   });
@@ -201,22 +203,69 @@ async function callback(core: Core, query: Record<string, string>): Promise<Http
   }
 }
 
-export function createHandlers(
-  core: Core,
-  setupHtml: string,
-): (req: HttpRequest) => Promise<HttpResponse> {
-  const { authorize, allowUnauthenticatedSetup } = core.options;
-  if (!authorize) {
-    // Setup without auth is a development convenience only, never in production.
-    if (!allowUnauthenticatedSetup || core.options.env.NODE_ENV === 'production') {
-      throw new Error(NO_AUTHORIZE);
-    }
+/**
+ * Throws unless the setup routes are protected: `authorize` is required, and
+ * `allowUnauthenticatedSetup` is a development-only escape hatch, refused in production.
+ */
+export function assertSetupAuth(options: ResolvedOptions): void {
+  if (options.authorize) return;
+  if (!options.allowUnauthenticatedSetup || options.env.NODE_ENV === 'production') {
+    throw new Error(NO_AUTHORIZE);
   }
+}
 
+/** What a dispatcher needs besides the shared auth/exemption logic. */
+interface RouteTable {
+  inbound(secret: string, body: unknown): Promise<HttpResponse>;
+  callback(query: Record<string, string>): Promise<HttpResponse>;
+  routes: Record<string, Handler>;
+  /** Runs when no route matched; returns undefined for a plain 404. */
+  fallback?: (req: HttpRequest) => HttpResponse | undefined;
+}
+
+/** The exemptions, authorize, the same-origin check and the error mapping, for every route. */
+function dispatcher(options: ResolvedOptions, logger: Logger, t: RouteTable): Handler {
+  const { authorize } = options;
+  return async (req) => {
+    const method = req.method.toUpperCase();
+    const hook = /^\/inbound\/([^/]+)$/.exec(req.path);
+    // The webhook path holds its secret, so logs name the pattern instead.
+    const route = hook ? `${method} /inbound/:secret` : `${method} ${req.path}`;
+    try {
+      // Exempt from authorize and the Origin check: GoTo and the OAuth redirect send neither
+      // the host's session nor a same-origin header. Each carries its own secret.
+      if (hook && method === 'POST') return await t.inbound(hook[1]!, req.body);
+      if (route === 'GET /callback') return await t.callback(req.query);
+
+      if (authorize && !(await authorize(req.raw))) {
+        return { status: 403, json: { error: 'forbidden', message: 'Not allowed' } };
+      }
+      if (method !== 'GET' && !sameOrigin(req, options.publicUrl)) {
+        return {
+          status: 403,
+          json: { error: 'cross_origin', message: 'Cross-origin request refused' },
+        };
+      }
+      const handler = t.routes[route];
+      if (handler) return await handler(req);
+      return (
+        t.fallback?.(req) ?? {
+          status: 404,
+          json: { error: 'not_found', message: 'No such route' },
+        }
+      );
+    } catch (err) {
+      return errorResponse(logger, route, err);
+    }
+  };
+}
+
+/** The routes of a started instance. */
+function liveHandlers(core: Core, setupHtml: string): Handler {
   const status = () => buildStatus(core.options, core);
   const ok = (json: unknown): HttpResponse => ({ status: 200, json });
 
-  const routes: Record<string, (req: HttpRequest) => Promise<HttpResponse>> = {
+  const routes: Record<string, Handler> = {
     'GET /': async () => ({ status: 200, html: setupHtml }),
     'GET /api/status': async () => ok(await status()),
     'POST /api/credentials': async (req) => {
@@ -285,31 +334,61 @@ export function createHandlers(
     },
   };
 
-  return async (req) => {
-    const method = req.method.toUpperCase();
-    const hook = /^\/inbound\/([^/]+)$/.exec(req.path);
-    // The webhook path holds its secret, so logs name the pattern instead.
-    const route = hook ? `${method} /inbound/:secret` : `${method} ${req.path}`;
-    try {
-      // Exempt from authorize and the Origin check: GoTo and the OAuth redirect send neither
-      // the host's session nor a same-origin header. Each carries its own secret.
-      if (hook && method === 'POST') return await inbound(core, hook[1]!, req.body);
-      if (route === 'GET /callback') return await callback(core, req.query);
+  return dispatcher(core.options, core.logger, {
+    inbound: (secret, body) => inbound(core, secret, body),
+    callback: (query) => callback(core, query),
+    routes,
+  });
+}
 
-      if (authorize && !(await authorize(req.raw))) {
-        return { status: 403, json: { error: 'forbidden', message: 'Not allowed' } };
-      }
-      if (method !== 'GET' && !sameOrigin(req, core.options.publicUrl)) {
-        return {
-          status: 403,
-          json: { error: 'cross_origin', message: 'Cross-origin request refused' },
-        };
-      }
-      const handler = routes[route];
-      if (!handler) return { status: 404, json: { error: 'not_found', message: 'No such route' } };
-      return await handler(req);
-    } catch (err) {
-      return errorResponse(core, route, err);
-    }
+/**
+ * The routes when startup failed (e.g. no encryption key): still behind authorize, the page
+ * and status answer so the admin can see why, and every other API route is `not_configured`.
+ */
+function startupFailedHandlers(
+  options: ResolvedOptions,
+  logger: Logger,
+  err: unknown,
+  setupHtml: string,
+): Handler {
+  const startupError = startupErrorText(err);
+  return dispatcher(options, logger, {
+    inbound: async () => ({ status: 404 }),
+    callback: async () => ({ status: 302, redirect: './?error=not_configured' }),
+    routes: {
+      'GET /': async () => ({ status: 200, html: setupHtml }),
+      'GET /api/status': async () => ({
+        status: 200,
+        json: await buildStatus(options, undefined, startupError),
+      }),
+    },
+    fallback: (req) =>
+      req.path.startsWith('/api/')
+        ? { status: 400, json: { error: 'not_configured', message: startupError } }
+        : undefined,
+  });
+}
+
+export function createHandlers(core: Core, setupHtml: string): Handler {
+  assertSetupAuth(core.options);
+  return liveHandlers(core, setupHtml);
+}
+
+/**
+ * For routers created before `ready` settles (hosts mount them synchronously). Waits for
+ * startup on each request; if it failed, serves the startup-failed routes. Doesn't check
+ * `authorize` itself: router() does, webhookRouter() needs none.
+ */
+export function createDeferredHandlers(
+  src: { options: ResolvedOptions; logger: Logger; core: Promise<Core> },
+  setupHtml: string,
+): Handler {
+  let handler: Promise<Handler> | undefined;
+  return async (req) => {
+    handler ??= src.core.then(
+      (core) => liveHandlers(core, setupHtml),
+      (err: unknown) => startupFailedHandlers(src.options, src.logger, err, setupHtml),
+    );
+    return (await handler)(req);
   };
 }

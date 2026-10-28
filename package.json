@@ -2,13 +2,14 @@
   "name": "goto-sms-monorepo",
   "private": true,
   "workspaces": [
+    "setup-ui",
     "packages/node"
   ],
   "scripts": {
-    "build": "npm -w packages/node run build",
-    "typecheck": "tsc -p packages/node --noEmit",
+    "build": "npm -w setup-ui run build && npm -w packages/node run build",
+    "typecheck": "node packages/node/scripts/embed-setup.mjs && tsc -p packages/node --noEmit && tsc -p setup-ui --noEmit",
     "lint": "oxlint --type-aware && prettier --check .",
-    "test": "npm -w packages/node test"
+    "test": "npm -w setup-ui run build && npm -w packages/node test"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

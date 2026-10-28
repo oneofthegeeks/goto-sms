@@ -2,6 +2,7 @@
 // inbound processing and polling together over one store.
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import type { Router } from 'express';
 import { join } from 'node:path';
 import { ConfigResolver } from './config.js';
 import { GoToSmsError, NotConfiguredError, SendFailedError } from './errors.js';
@@ -14,7 +15,10 @@ import { GoToAuth } from './oauth.js';
 import { OptOuts } from './optouts.js';
 import { resolveEncryptionKey, SecretBox } from './secrets.js';
 import { Sender } from './send.js';
-import { buildStatus, type StatusPayload } from './server/status.js';
+import { buildExpressRouter } from './server/express.js';
+import { assertSetupAuth, createDeferredHandlers } from './server/handlers.js';
+import { SETUP_HTML } from './server/setup-html.generated.js';
+import { buildStatus, startupErrorText, type StatusPayload } from './server/status.js';
 import { FileStore } from './store/file.js';
 import type { GoToSmsStore } from './store/types.js';
 import type { FetchLike, InboundMessage, Logger, SendOptions, SendResult } from './types.js';
@@ -122,6 +126,14 @@ export interface GoToSms {
    * configuration: if startup failed for lack of an encryption key it reports not set up.
    */
   status(): Promise<StatusPayload>;
+  /**
+   * The setup page, its JSON API, the OAuth callback and the webhook, for
+   * `app.use(mountPath, sms.router())`. Throws without `authorize` (see contract/http.md).
+   * Usable before `ready`; if startup fails the page still loads and shows why.
+   */
+  router(): Router;
+  /** Only `POST /inbound/:secret`, for hosts that serve the setup page elsewhere or not at all. */
+  webhookRouter(): Router;
   /** Resolves after key resolution, the process lock, replayPending and poller start. */
   ready: Promise<void>;
   close(): Promise<void>;
@@ -388,6 +400,13 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
   };
   const isResult = (v: Core | SendResult): v is SendResult => 'status' in v;
 
+  // One handler set shared by router() and webhookRouter(); it waits for startup per request.
+  let handle: ReturnType<typeof createDeferredHandlers> | undefined;
+  const routerSource = () => {
+    handle ??= createDeferredHandlers({ options, logger, core: coreReady }, SETUP_HTML);
+    return { options, logger, handle };
+  };
+
   const sms: GoToSms = {
     async send(to, text, opts = {}) {
       const c = await coreOr();
@@ -415,13 +434,21 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       list: async () => (await coreReady).optOuts.list(),
     },
     async status() {
-      let c: Core | undefined;
+      let c: Core;
       try {
         c = await coreReady;
       } catch (err) {
         if (!(err instanceof NotConfiguredError)) throw err;
+        return buildStatus(options, undefined, startupErrorText(err));
       }
       return buildStatus(options, c);
+    },
+    router() {
+      assertSetupAuth(options);
+      return buildExpressRouter(routerSource());
+    },
+    webhookRouter() {
+      return buildExpressRouter(routerSource(), { inboundOnly: true });
     },
     ready,
     async close() {
