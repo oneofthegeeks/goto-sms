@@ -288,8 +288,10 @@ A package exposes two mountable routers:
 - Request: GoTo's webhook envelope (parsed loosely).
 - Response (no body, except the `400` below):
   - `404` when incoming mode isn't `webhook`, or the secret is wrong;
-  - `204` for anything that isn't an inbound text (GoTo sends other event types), and for a
-    duplicate of an already-received message;
+  - `204` for anything that isn't an inbound text (GoTo sends other event types), for a
+    duplicate of an already-received message, and for a text addressed to **another number** in
+    the GoTo account (a subscription covers the whole account; only a known `to` that differs from
+    the configured sending number is dropped, unstored and unprocessed);
   - otherwise the message is **persisted as pending first**, then `204` is returned, then it is
     processed (keywords, opt-outs, the host's `message` event) after the response. A processing
     failure leaves it pending for the background retry;

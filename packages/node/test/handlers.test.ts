@@ -80,14 +80,14 @@ async function webhookMode(sms: GoToSms, secret = 'S'.repeat(43)): Promise<strin
   return secret;
 }
 
-const envelope = (id: string, text = 'hello there') => ({
+const envelope = (id: string, text = 'hello there', owner = FROM) => ({
   type: 'INBOUND_MESSAGE',
   content: {
     payload: {
       id,
       direction: 'INBOUND',
       authorTouchpoint: PEER,
-      ownerPhoneNumber: FROM,
+      ownerPhoneNumber: owner,
       body: text,
       timestamp: '2026-10-27T10:00:00Z',
     },
@@ -305,6 +305,30 @@ test('OPTIONS /inbound/:secret answers 200 before webhook mode is on (GoTo valid
   assert.equal(ok.status, 200, 'right secret, mode still off');
   const wrong = await handle(req('OPTIONS', `/inbound/${'w'.repeat(43)}`));
   assert.equal(wrong.status, 404, 'wrong secret');
+});
+
+test('inbound: a text to another number in the same GoTo account is ignored', async () => {
+  // A GoTo webhook subscription covers the whole account, so texts to the account's other
+  // numbers (another app's) arrive here too. Acting on them would opt people out of, and
+  // reply from, the wrong app.
+  const { sms, handle } = await setup();
+  const secret = await webhookMode(sms);
+  const other = await handle(
+    req('POST', `/inbound/${secret}`, { body: envelope('g-other', 'STOP', '+13855550000') }),
+  );
+  assert.equal(other.status, 204, 'acknowledged so GoTo does not retry');
+  assert.equal(
+    await sms.core.store.get(sms.core.tenant, 'inbound:pending:g-other'),
+    undefined,
+    'not stored',
+  );
+  assert.equal(await sms.optOuts.has(PEER), false, 'STOP to another number does not opt out here');
+  const mine = await handle(req('POST', `/inbound/${secret}`, { body: envelope('g-mine') }));
+  assert.equal(mine.status, 204);
+  assert.ok(
+    await sms.core.store.get(sms.core.tenant, 'inbound:pending:g-mine'),
+    'own number still stored',
+  );
 });
 
 test('inbound bad secret → 404', async () => {

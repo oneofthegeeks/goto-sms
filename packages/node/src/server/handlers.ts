@@ -219,6 +219,15 @@ async function inbound(core: Core, secret: string, body: unknown): Promise<HttpR
   // GoTo sends other event types to the same channel; acknowledge and ignore them.
   const message = parseWebhookEnvelope(body);
   if (!message) return { status: 204 };
+  // A subscription covers the whole GoTo account, so texts to its other numbers (often
+  // another app's) arrive here too. Acting on them would opt people out of, and reply from,
+  // the wrong app. Only a known `to` that differs from our number is dropped; polling is
+  // already scoped to our number.
+  const { fromNumber } = await core.config.resolve();
+  if (fromNumber && message.to && message.to !== fromNumber) {
+    core.logger.debug('goto-sms: ignored an inbound text to another number in the account');
+    return { status: 204 };
+  }
   // Persisted before the 204, so an acknowledged STOP survives a crash.
   const fresh = await core.processor.persist(message);
   if (fresh) {
