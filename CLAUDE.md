@@ -25,7 +25,11 @@ npm run typecheck && npm run lint && npm test && npm run build
 
 ## Deployment
 
-Library: tag `vX.Y.Z` -> publish.yml -> npm (manual approval). No Docker/Poppy.
+Library, no Docker/Poppy. Release: bump `packages/node/package.json` version + a `CHANGELOG.md` row (via PR), then push tag `vX.Y.Z` -> publish.yml waits for Taylor's approval (GitHub environment `npm`) -> npm via trusted publishing (OIDC, provenance) + GitHub release with the setup-ui zip. publish.yml fails if the tag != package version and skips npm if that version already exists.
+
+- `main` ruleset: changes only by PR with green `ci (20/22/24)` + `e2e`; no force-push/deletion; 0 approvals (solo). Direct pushes to main are rejected — branch first.
+- `v*` tags are immutable (no move/delete, no bypass) — a wrong tag means a new version, not a re-tag.
+- Manual npm publish (only needed if trusted publishing breaks) uses passkey web-auth: run it in a real terminal pane, not Claude's `!` (no TTY).
 
 ## Key Files
 
