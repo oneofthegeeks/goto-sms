@@ -62,6 +62,8 @@ export interface FakeGoTo {
     timestamp: string;
     direction?: 'IN' | 'OUT';
   }>;
+  /** Page size for the polling routes, overriding the request's pageSize (paging tests). */
+  pollPageSize?: number;
   /** Notification channels (party-invites subscribeInbound); `channelId` is `ch-<n>`. */
   channels: Array<{ channelId: string; channelType: string; webhookChannelData?: unknown }>;
   /** Messaging subscriptions; `id` is `sub-<n>`. */
@@ -195,6 +197,19 @@ export async function startFakeGoTo(
   // --- API: polling (geeks-tracker fetchInbound). Both read `fake.inbound`, filtered by
   // owner number and oldestTimestamp (compared with Date.parse, like GoTo's mixed precision).
   const since = (req: FakeRequest) => Date.parse(req.query.get('oldestTimestamp') ?? '') || 0;
+  // Paged like GoTo: pageSize per page (fake.pollPageSize overrides), pageMarker = offset.
+  const paged = (req: FakeRequest, all: unknown[]): FakeResponse => {
+    const size = fake.pollPageSize ?? (Number(req.query.get('pageSize')) || 100);
+    const start = Number(req.query.get('pageMarker') ?? 0);
+    const more = start + size < all.length;
+    return {
+      status: 200,
+      body: {
+        items: all.slice(start, start + size),
+        ...(more ? { nextPageMarker: String(start + size) } : {}),
+      },
+    };
+  };
   const forOwner = (req: FakeRequest) =>
     fake.inbound.filter(
       (m) => m.to === req.query.get('ownerPhoneNumber') && Date.parse(m.timestamp) >= since(req),
@@ -209,7 +224,7 @@ export async function startFakeGoTo(
       contactPhoneNumbers: [contact],
       lastMessageTimestamp,
     }));
-    return { status: 200, body: { items } };
+    return paged(req, items);
   });
   fake.route('GET', '/messaging/v1/messages', (req) => {
     // Served in reverse order on purpose: callers must sort, not trust the API's order.
@@ -225,7 +240,7 @@ export async function startFakeGoTo(
         timestamp: m.timestamp,
       }))
       .reverse();
-    return { status: 200, body: { items } };
+    return paged(req, items);
   });
 
   // --- API: notification channels + subscriptions (party-invites subscribeInbound) ---
