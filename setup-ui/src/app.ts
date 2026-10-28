@@ -556,11 +556,6 @@ function advance(from: StepNo): void {
 
 // --- Data -------------------------------------------------------------------------------------
 
-async function refreshStatus(): Promise<Status> {
-  status = await api<Status>('api/status');
-  render();
-  return status;
-}
 function apply(s: Status): void {
   status = s;
   render();
