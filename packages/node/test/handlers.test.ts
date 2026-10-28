@@ -597,3 +597,48 @@ test('selection: a failed re-subscribe keeps the selection and shows the error i
     ['acct-2'],
   );
 });
+
+test('retry after a failed move: the old-account subscription is deleted before the new one is made', async () => {
+  const { fake, sms, handle } = await setup();
+  await sms.core.config.save({ accountKey: 'acct-1' });
+  await handle(req('POST', '/api/incoming', { body: { mode: 'webhook' } }));
+  const oldId = fake.subscriptions[0]!.id;
+  // The DELETE of the acct-1 subscription fails, so the move stops with the error stored.
+  fake.failNext('DELETE', `/messaging/v2/subscriptions/${oldId}`, 500, { message: 'down' });
+  const moved = await handle(req('POST', '/api/selection', { body: { accountKey: 'acct-2' } }));
+  assert.equal((moved.json as StatusPayload).incoming.error?.gotoStatus, 500);
+  assert.deepEqual(
+    fake.subscriptions.map((x) => x.accountKey),
+    ['acct-1'],
+  );
+
+  // The page's "Retry webhook setup" re-posts webhook mode.
+  const retry = await handle(req('POST', '/api/incoming', { body: { mode: 'webhook' } }));
+  assert.equal(retry.status, 200);
+  assert.equal((retry.json as StatusPayload).incoming.error, undefined);
+  assert.deepEqual(
+    fake.subscriptions.map((x) => x.accountKey),
+    ['acct-2'],
+    'no acct-1 subscription is left delivering',
+  );
+});
+
+test('retry after a failed move: a second failed DELETE creates nothing and keeps the error', async () => {
+  const { fake, sms, handle } = await setup();
+  await sms.core.config.save({ accountKey: 'acct-1' });
+  await handle(req('POST', '/api/incoming', { body: { mode: 'webhook' } }));
+  const oldId = fake.subscriptions[0]!.id;
+  fake.failNext('DELETE', `/messaging/v2/subscriptions/${oldId}`, 500, { message: 'down' });
+  fake.failNext('DELETE', `/messaging/v2/subscriptions/${oldId}`, 500, { message: 'down' });
+  await handle(req('POST', '/api/selection', { body: { accountKey: 'acct-2' } }));
+
+  const retry = await handle(req('POST', '/api/incoming', { body: { mode: 'webhook' } }));
+  assert.equal(retry.status, 502);
+  assert.deepEqual(
+    fake.subscriptions.map((x) => x.accountKey),
+    ['acct-1'],
+    'no acct-2 subscription while the old one is still there',
+  );
+  const status = (await handle(req('GET', '/api/status'))).json as StatusPayload;
+  assert.equal(status.incoming.error?.gotoStatus, 500);
+});
