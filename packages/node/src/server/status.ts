@@ -15,6 +15,16 @@ export const REQUIRED_SCOPES = [
   'voice-admin.v1.read',
 ];
 
+/** Store key: why moving the webhook to a newly selected account failed (`incoming.error`). */
+export const INBOUND_ERROR = 'inbound:error';
+
+/** A failed webhook re-subscribe: the package error code and GoTo's HTTP status, no body. */
+export interface IncomingError {
+  error: string;
+  message: string;
+  gotoStatus?: number;
+}
+
 /**
  * Never carries the client secret, tokens or the refresh token (C22). The webhook secret
  * appears only inside `incoming.webhookUrl`, which the authorized admin needs to see.
@@ -42,6 +52,11 @@ export interface StatusPayload {
     webhookUrl?: string;
     /** publicUrl is https. */
     canWebhook: boolean;
+    /**
+     * Set when the account changed in webhook mode and moving the subscription failed:
+     * texts to the selected account aren't arriving. Cleared by a successful mode switch.
+     */
+    error?: IncomingError;
   };
   requiredScopes: string[];
   /** Why startup failed (e.g. no encryption key), when it did. Secret-free. */
@@ -56,6 +71,17 @@ export function startupErrorText(err: unknown): string {
   return err instanceof GoToSmsError
     ? err.message
     : `goto-sms failed to start (${errorName(err)}); see the server logs`;
+}
+
+function asIncomingError(v: unknown): IncomingError | undefined {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  if (typeof o.error !== 'string' || typeof o.message !== 'string') return undefined;
+  return {
+    error: o.error,
+    message: o.message,
+    ...(typeof o.gotoStatus === 'number' ? { gotoStatus: o.gotoStatus } : {}),
+  };
 }
 
 const UNSET: Record<ConfigField, Source> = {
@@ -100,6 +126,7 @@ export async function buildStatus(
   const secret = mode === 'webhook' ? await getWebhookSecret(core.store, core.tenant) : undefined;
   const webhookUrl = secret ? core.webhookUrl(secret) : undefined;
   const configured = Boolean(r.clientId && r.clientSecret) && !r.credentialsUnreadable;
+  const error = asIncomingError(await core.store.get(core.tenant, INBOUND_ERROR));
   return {
     ...base,
     configured,
@@ -113,6 +140,11 @@ export async function buildStatus(
     ...(r.invalidFromNumber ? { invalidFromNumber: true as const } : {}),
     sources: r.sources,
     ...(auth.refreshSource ? { refreshSource: auth.refreshSource } : {}),
-    incoming: { mode, ...(webhookUrl ? { webhookUrl } : {}), canWebhook },
+    incoming: {
+      mode,
+      ...(webhookUrl ? { webhookUrl } : {}),
+      canWebhook,
+      ...(error ? { error } : {}),
+    },
   };
 }

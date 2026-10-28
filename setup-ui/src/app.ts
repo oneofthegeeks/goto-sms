@@ -20,7 +20,12 @@ interface Status {
   invalidFromNumber?: true;
   sources: Record<Field, Source>;
   redirectUri: string;
-  incoming: { mode: Mode; webhookUrl?: string; canWebhook: boolean };
+  incoming: {
+    mode: Mode;
+    webhookUrl?: string;
+    canWebhook: boolean;
+    error?: { error: string; message: string; gotoStatus?: number };
+  };
   requiredScopes: string[];
   startupError?: string;
 }
@@ -243,6 +248,16 @@ function renderIncoming(s: Status): void {
   }
   $('webhook-url').textContent = s.incoming.webhookUrl ?? '';
   $('webhook-url-row').hidden = !s.incoming.webhookUrl;
+  // Moving the webhook to a newly picked account failed: texts to it aren't arriving.
+  const err = s.incoming.error;
+  $('incoming-error').hidden = !err;
+  $('incoming-error').textContent = err
+    ? 'Incoming texts for the selected account are not set up: ' +
+      err.message +
+      (err.gotoStatus ? ' (GoTo ' + String(err.gotoStatus) + ')' : '') +
+      '.'
+    : '';
+  $('incoming-retry').hidden = !err;
 }
 
 function renderNumberLocks(s: Status): void {
@@ -602,6 +617,10 @@ function wire(): void {
   for (const r of document.querySelectorAll<HTMLInputElement>('input[name="incoming"]')) {
     r.addEventListener('change', () => void setIncoming(r.value as Mode));
   }
+  // The webhook radio is already checked when a re-subscribe failed, so it can't fire change.
+  $('incoming-retry').addEventListener('click', () => {
+    void busy($<HTMLButtonElement>('incoming-retry'), () => setIncoming('webhook'));
+  });
   $('refresh-log').addEventListener('click', () => {
     const b = $<HTMLButtonElement>('refresh-log');
     void busy(b, () => loadLog().catch(() => announce('Could not load messages')));

@@ -110,6 +110,7 @@ Returned by `GET /api/status` and by every state-changing route marked "returns 
     "mode": "webhook", // "webhook" | "polling" | "off"
     "webhookUrl": "https://x.example/goto-sms/inbound/<secret>", // only in webhook mode
     "canWebhook": true, // publicUrl is https
+    "error": { "error": "goto_api", "message": "GoTo API error 403", "gotoStatus": 403 }, // optional, see below
   },
   "requiredScopes": [
     "messaging.v1.send",
@@ -120,6 +121,11 @@ Returned by `GET /api/status` and by every state-changing route marked "returns 
   "startupError": "…", // optional: only when startup failed; a fixed, secret-free reason
 }
 ```
+
+`incoming.error` is present when the account changed in webhook mode and moving the
+subscription failed (see `POST /api/selection`): texts to the selected account are not arriving. It
+carries the error code, its message and GoTo's HTTP status, never GoTo's body. It is cleared by the
+next successful `POST /api/incoming` (any mode) or a successful move.
 
 If the package could not start (for example no encryption key), the status still answers, with
 `configured`, `connected` and `ready` false, every source `"unset"`, and `startupError` saying why
@@ -210,6 +216,10 @@ A package exposes two mountable routers:
 - Auth: `authorize` + same-origin.
 - Request: `{ "accountKey"?: string, "fromNumber"?: string }`. `fromNumber` may be loosely
   formatted and is saved as E.164; an empty value clears a stored field.
+- In webhook mode, when the selected account differs from the account the subscription is on, the
+  subscription moves: the old one is deleted (the webhook secret, URL and channel are kept) and an
+  `INBOUND_MESSAGE` subscription is made on the new account. If that fails the selection is still
+  saved, the response is still `200`, and the status carries `incoming.error`.
 - Response: the status payload.
 - Errors: `400 invalid_number`, `400 invalid_input`, `409 locked`.
 

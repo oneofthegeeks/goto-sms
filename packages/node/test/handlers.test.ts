@@ -536,3 +536,59 @@ test('incoming: webhook → polling resets the poll cursor to now; off → polli
   await poller.idle();
   assert.equal(await store.get(tenant, 'poll:cursor'), old);
 });
+
+test('selection: a new accountKey in webhook mode moves the subscription to that account', async () => {
+  const { fake, sms, handle } = await setup();
+  await sms.core.config.save({ accountKey: 'acct-1' });
+  const on = await handle(req('POST', '/api/incoming', { body: { mode: 'webhook' } }));
+  const url = (on.json as StatusPayload).incoming.webhookUrl!;
+  assert.deepEqual(
+    fake.subscriptions.map((s) => s.accountKey),
+    ['acct-1'],
+  );
+
+  const r = await handle(req('POST', '/api/selection', { body: { accountKey: 'acct-2' } }));
+  assert.equal(r.status, 200);
+  const s = r.json as StatusPayload;
+  assert.equal(s.accountKey, 'acct-2');
+  assert.equal(s.incoming.mode, 'webhook');
+  assert.equal(s.incoming.error, undefined);
+  assert.equal(s.incoming.webhookUrl, url, 'same URL and secret: GoTo keeps the channel');
+  assert.deepEqual(
+    fake.subscriptions.map((x) => x.accountKey),
+    ['acct-2'],
+  );
+  assert.equal(fake.channels.length, 1);
+  // Saving the same account again doesn't touch GoTo.
+  fake.requests.length = 0;
+  await handle(req('POST', '/api/selection', { body: { accountKey: 'acct-2' } }));
+  assert.ok(!fake.requests.some((x) => x.path.startsWith('/messaging/v2/subscriptions')));
+});
+
+test('selection: a failed re-subscribe keeps the selection and shows the error in status', async () => {
+  const { fake, sms, handle } = await setup();
+  await sms.core.config.save({ accountKey: 'acct-1' });
+  await handle(req('POST', '/api/incoming', { body: { mode: 'webhook' } }));
+  // Both subscription shapes refused (enableWebhook retries ORGANIZATION on a 4xx).
+  fake.failNext('POST', '/messaging/v2/subscriptions', 403, { message: 'nope' });
+  fake.failNext('POST', '/messaging/v2/subscriptions', 403, { message: 'nope' });
+
+  const r = await handle(req('POST', '/api/selection', { body: { accountKey: 'acct-2' } }));
+  assert.equal(r.status, 200);
+  const s = r.json as StatusPayload;
+  assert.equal(s.accountKey, 'acct-2', 'selection kept');
+  assert.deepEqual(s.incoming.error, {
+    error: 'goto_api',
+    message: 'GoTo API error 403',
+    gotoStatus: 403,
+  });
+  // Still reported on a plain status read, and cleared once a mode switch succeeds.
+  const again = (await handle(req('GET', '/api/status'))).json as StatusPayload;
+  assert.equal(again.incoming.error?.gotoStatus, 403);
+  const fixed = await handle(req('POST', '/api/incoming', { body: { mode: 'webhook' } }));
+  assert.equal((fixed.json as StatusPayload).incoming.error, undefined);
+  assert.deepEqual(
+    fake.subscriptions.map((x) => x.accountKey),
+    ['acct-2'],
+  );
+});
