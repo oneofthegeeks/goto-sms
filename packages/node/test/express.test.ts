@@ -57,12 +57,12 @@ test('GET /goto-sms/ serves html containing goto-sms v', async () => {
   const html = await res.text();
   assert.ok(html.includes('goto-sms v'));
   // The real page, not the stub embed-setup.mjs writes when setup-ui wasn't built.
-  assert.ok(html.includes('GoTo OAuth client'), 'run npm run build first: got the stub page');
+  assert.ok(html.includes('Create your GoTo app'), 'run npm run build first: got the stub page');
 });
 
 test('page has no absolute /goto-sms/ or /api/ URLs', () => {
   const absolute = /["'`](\/goto-sms|\/api)\//;
-  assert.ok(SETUP_HTML.includes('GoTo OAuth client'), 'run npm run build first: got the stub');
+  assert.ok(SETUP_HTML.includes('Create your GoTo app'), 'run npm run build first: got the stub');
   assert.ok(!absolute.test(SETUP_HTML));
   // The sources too, so the check means something even before a build.
   for (const f of ['index.html', 'app.ts']) {
