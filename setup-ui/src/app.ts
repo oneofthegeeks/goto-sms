@@ -543,15 +543,15 @@ function showManage(o: { focus?: boolean } = {}): void {
   }
 }
 
-/** After a step succeeded: the next unfinished step, step 5 after 4, or the manage view. */
+/** After a step succeeded: the next unfinished step, step 5 if not yet chosen, or the manage view. */
 function advance(from: StepNo): void {
   const s = status;
   if (!s) return;
   const next = firstUnfinished(s);
   if (next) goTo(next, { focus: true });
-  else if (fromManage || from === 5) showManage({ focus: true });
-  else if (from < 4) goTo(4, { focus: true });
-  else goTo(5, { focus: true });
+  // First run: the optional incoming step comes before the summary, unless already set up.
+  else if (!fromManage && from < 5 && !done(s, 5)) goTo(5, { focus: true });
+  else showManage({ focus: true });
 }
 
 // --- Data -------------------------------------------------------------------------------------
