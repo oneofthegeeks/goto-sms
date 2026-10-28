@@ -262,6 +262,34 @@ test('inbound: 204 returned and message pending in store before processing', asy
   assert.equal(await sms.core.store.get(sms.core.tenant, 'inbound:pending:g-1'), undefined);
 });
 
+test('close() resolves only after a slow post-204 process finishes', async () => {
+  const fake = await fakeGoTo();
+  const sms = await connectedSms(fake, { authorize: () => true });
+  const handle = createHandlers(sms.core, HTML);
+  const secret = await webhookMode(sms);
+  const original = sms.core.processor.process.bind(sms.core.processor);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let finished = false;
+  sms.core.processor.process = async (id: string) => {
+    await gate;
+    await original(id);
+    finished = true;
+  };
+
+  const r = await handle(req('POST', `/inbound/${secret}`, { body: envelope('g-close') }));
+  assert.equal(r.status, 204);
+  let closed = false;
+  const closing = sms.close().then(() => (closed = true));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(closed, false, 'close() waits for the in-flight inbound text');
+  release();
+  await closing;
+  assert.equal(finished, true);
+  assert.equal(sms.core.inflight.size, 0);
+  assert.equal(await sms.core.store.get(sms.core.tenant, 'inbound:pending:g-close'), undefined);
+});
+
 test('inbound bad secret → 404', async () => {
   const { sms, handle } = await setup();
   const r1 = await handle(req('POST', '/inbound/wrong', { body: envelope('g-2') }));
