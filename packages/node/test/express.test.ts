@@ -142,6 +142,9 @@ test('webhookRouter() exposes only /inbound', async () => {
   assert.equal(hook.status, 204);
   const wrong = await fetch(`${base}/goto-sms/inbound/${'x'.repeat(43)}`, jsonPost(base, '{}'));
   assert.equal(wrong.status, 404);
+  // GoTo's URL check while creating the channel.
+  const options = await fetch(`${base}/goto-sms/inbound/${secret}`, { method: 'OPTIONS' });
+  assert.equal(options.status, 200, 'OPTIONS reaches the webhook through webhookRouter()');
 });
 
 test('baseUrl mismatch warns once', async () => {
