@@ -34,8 +34,10 @@ sms.on('message', (msg) => console.log(msg.from, msg.text));
 await sms.send('+15551234567', 'Hello'); // anywhere in your code
 ```
 
-Open `/goto-sms` in your browser and follow the page: register the redirect URI, paste the client
-ID and secret, Connect, pick account and number, **Send test text**. Without `authorize`,
+Open `/goto-sms` in your browser. The page walks you through five steps, one at a time: create the
+GoTo app (redirect URI and scopes with copy buttons), paste the client ID and secret, sign in to
+GoTo, pick the sending number, **Send test text**, and choose how replies arrive. Once everything
+works it shows a Ready summary with Change links, the recent activity and the opt-out list. Without `authorize`,
 `router()` throws (pass `allowUnauthenticatedSetup: true` only in development). `mountPath`
 (default `/goto-sms`) must match where you mount the router, because it is part of the redirect URI
 and webhook URL.
@@ -46,7 +48,36 @@ startup errors other than `NotConfiguredError` (for example an unreadable store)
 
 `sms.status()` returns the setup page's status (configured, connected, ready, incoming mode), for
 a health check. Unlike the page's own `/api/status`, it leaves out the webhook URL, because that
-URL contains the webhook secret.
+URL contains the webhook secret. It reads stored state only and makes no GoTo call.
+
+`await sms.verifyConnection()` checks the GoTo login for real: it gets a new access token now
+(exchanging a `GOTO_REFRESH_TOKEN` seed if one is waiting, otherwise refreshing), then returns
+`status().connected`. It never throws for login or configuration problems; it returns `false` and
+`status()` says why (for example `loginExpired`). Use it to move a seeded login over at startup or
+for a deeper health check. Each call makes one GoTo token request, so don't poll it every few
+seconds.
+
+`sms.core` is internal: it exists for the package's own route handlers and may change in any
+release, including patch releases. Use the methods above instead.
+
+### Fitting the page into your app
+
+```js
+const sms = createGoToSms({
+  authorize: (req) => Boolean(req.cookies?.session), // req is your framework's request
+  backUrl: '/admin', // adds "← Back to Spring Ideas" at the top of the page
+  backLabel: 'Spring Ideas', // default 'the app'
+  loginUrl: '/login?next=/goto-sms/', // where a signed-out visitor to the page is sent
+});
+```
+
+- `authorize(req)` receives the framework's own request (Express: with `req.cookies`, `req.user`
+  and so on, already typed loosely so you need no cast) and returns a boolean or a promise of one.
+- `backUrl` / `backLabel`: a link back to your app at the top of the setup page.
+- `loginUrl`: when `authorize` says no, a browser opening the page is redirected (302) here
+  instead of getting a bare 403. The page's API routes still answer 403 JSON.
+- `backUrl` and `loginUrl` must be an `http(s)` URL or a relative path (`/admin`, `../app`).
+  `createGoToSms` throws for anything else, such as `javascript:`, `data:` or `//other-host`.
 
 ## Create the GoTo OAuth client
 
@@ -82,7 +113,8 @@ Each setting can come from three places. Highest precedence first:
 | Encryption key            | `encryptionKey` | `GOTO_SMS_ENCRYPTION_KEY` |
 | Public base URL           | `publicUrl`     | `GOTO_SMS_PUBLIC_URL`     |
 
-Empty env vars count as unset. Values from options or env show on the setup page as locked
+Blank values and the literal placeholder `CHANGEME` (any case) count as unset, in options and env
+alike, so a secret manager's unfilled key never becomes a locked client ID or the encryption key. Values from options or env show on the setup page as locked
 ("set by config") and are never written to the store.
 
 `GOTO_REFRESH_TOKEN` **seeds, then the store manages it.** GoTo rotates refresh tokens, and an env
@@ -91,7 +123,7 @@ existing app move over without reconnecting. A new `GOTO_REFRESH_TOKEN` cannot r
 GoTo has already killed (for example a browser login that expired); use **Reconnect** on the setup
 page instead.
 
-Other options: `mountPath`, `dataDir` (default `./data`), `store`, `tenant` (default `"default"`),
+Other options: `mountPath`, `backUrl`, `backLabel`, `loginUrl` (see above), `dataDir` (default `./data`), `store`, `tenant` (default `"default"`),
 `logOnly`, `replies` (`{ stop, start, help }` text), `yesIsOptIn` (default true), `pollIntervalMs`
 (default 30 s), `sendTimeoutMs` (default 10 s), `inboundPerHour` (default 10), `logRetentionDays`
 (default 90), `logger` (default `console` without debug lines; pass your own `{ debug, info, warn, error }` to see them, or `false` to silence), `fetch`, `authBaseUrl`,
@@ -202,7 +234,8 @@ number.
 - **403 on send:** the login lacks `messaging.v1.send`, or the number is not SMS-enabled in GoTo
   Admin.
 - **A 10DLC / "campaign" error:** the number is not registered to a 10DLC campaign.
-- **Setup page shows "login expired":** GoTo refused the refresh token. Click **Reconnect**.
+- **Setup page says GoTo refused the saved login:** GoTo refused the refresh token. Click
+  **Reconnect** in the "Sign in to GoTo" step.
 - **Webhook setup fails with a 403:** the GoTo login that connected is not a Super Admin.
 - **Nothing arrives by webhook:** the URL must be public https; try polling to confirm the rest.
 

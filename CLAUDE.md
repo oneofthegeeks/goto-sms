@@ -38,7 +38,7 @@ Library, no Docker/Poppy. Release: bump `packages/node/package.json` version + a
 - `packages/node/src/types.ts` - shared types, `VERSION`; `errors.ts` - error classes; `index.ts` - public exports
 - `packages/node/scripts/embed-setup.mjs` - embeds `setup-ui/dist` into the generated (gitignored) `setup-html.generated.ts`
 - `packages/node/tsup.config.ts` - build; injects `__VERSION__`
-- `setup-ui/` - the shared static setup page
+- `setup-ui/` - the shared static setup page: `src/app.ts` (five-step stepper + manage view, plain TS), `index.html`, `styles.css`
 - `contract/` - `http.md` (endpoint spec), `conformance.md` (C1-C23 to tests)
 - `e2e/` - Playwright test; `examples/express-app/` - runnable demo
 - `.github/workflows/` - `ci.yml`, `publish.yml` (tag `v*`, `npm` environment)
