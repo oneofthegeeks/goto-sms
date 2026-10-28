@@ -50,7 +50,18 @@ export interface FakeGoTo {
    * pageMarker is the next page's index as a string; the last page carries no nextPageMarker.
    */
   numbersPages: unknown[][];
-  inbound: Array<{ id: string; from: string; to: string; body: string; timestamp: string }>;
+  /**
+   * Messages served by the polling routes. `from` is the contact and `to` our number;
+   * `direction: 'OUT'` makes it one of our sends to that contact (default 'IN').
+   */
+  inbound: Array<{
+    id: string;
+    from: string;
+    to: string;
+    body: string;
+    timestamp: string;
+    direction?: 'IN' | 'OUT';
+  }>;
   /** Notification channels (party-invites subscribeInbound); `channelId` is `ch-<n>`. */
   channels: Array<{ channelId: string; channelType: string; webhookChannelData?: unknown }>;
   /** Messaging subscriptions; `id` is `sub-<n>`. */
@@ -206,8 +217,8 @@ export async function startFakeGoTo(
       .filter((m) => m.from === req.query.get('contactPhoneNumber'))
       .map((m) => ({
         id: m.id,
-        direction: 'IN',
-        authorPhoneNumber: m.from,
+        direction: m.direction ?? 'IN',
+        authorPhoneNumber: m.direction === 'OUT' ? m.to : m.from,
         ownerPhoneNumber: m.to,
         contactPhoneNumber: m.from,
         body: m.body,

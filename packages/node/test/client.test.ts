@@ -19,6 +19,21 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
 });
 
+type Level = 'debug' | 'info' | 'warn' | 'error';
+/** Replaces console's log methods with recorders until the test's cleanup runs. */
+function captureConsole() {
+  const calls: Array<{ level: Level; args: unknown[] }> = [];
+  const levels: Level[] = ['debug', 'info', 'warn', 'error'];
+  const saved = levels.map((level) => [level, console[level]] as const);
+  for (const level of levels) {
+    console[level] = (...args: unknown[]) => void calls.push({ level, args });
+  }
+  cleanups.unshift(async () => {
+    for (const [level, fn] of saved) console[level] = fn;
+  });
+  return calls;
+}
+
 async function fakeGoTo() {
   const fake = await startFakeGoTo();
   cleanups.push(() => fake.close());
@@ -144,6 +159,7 @@ test('async handler rejection is logged without the message text', async () => {
 });
 
 test('polling mode starts the poller on ready; logger: false is silent', async () => {
+  const consoleCalls = captureConsole();
   const fake = await fakeGoTo();
   const store = new MemoryStore(() => T0);
   await store.set('default', 'inbound:mode', 'polling');
@@ -158,6 +174,10 @@ test('polling mode starts the poller on ready; logger: false is silent', async (
   // tick now that it's connected proves the poller is wired to the facade's handlers.
   const got: InboundMessage[] = [];
   sms.on('message', (m) => void got.push(m));
+  // A throwing handler makes the facade warn, which logger: false must swallow.
+  sms.on('message', () => {
+    throw new Error('boom');
+  });
   fake.inbound.push({
     id: 'g-1',
     from: PEER,
@@ -168,4 +188,17 @@ test('polling mode starts the poller on ready; logger: false is silent', async (
   await sms.core.poller.tick();
   assert.equal(got.length, 1);
   assert.equal(sms.core.poller.running, true);
+  assert.deepEqual(consoleCalls, [], 'logger: false writes nothing to console');
+});
+
+test('default logger is console with a [goto-sms] prefix', async () => {
+  const consoleCalls = captureConsole();
+  const sms = createGoToSms({ store: new MemoryStore(), env: {} });
+  await assert.rejects(sms.ready, NotConfiguredError);
+  await sms.close();
+  const err = consoleCalls.find((c) => c.level === 'error');
+  assert.ok(err, 'startup failure is logged to console.error');
+  assert.equal(err.args[0], '[goto-sms]');
+  assert.equal(typeof err.args[1], 'string');
+  assert.equal((err.args[1] as string).startsWith('goto-sms:'), false, 'no doubled prefix');
 });
