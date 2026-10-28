@@ -8,7 +8,9 @@ The package handles GoTo's OAuth quirks, token refresh, number cleanup, STOP/STA
 inbound texts.
 
 Requires Node 20 or newer. Express 4 or 5 is a peer dependency (only for `router()`); the core has
-no runtime dependencies and no native modules.
+no runtime dependencies and no native modules. The type declarations reference `express` and
+`better-sqlite3` types, so TypeScript projects without `skipLibCheck` also need `@types/express` and
+`@types/better-sqlite3` installed.
 
 ## Quick start (60 seconds)
 
