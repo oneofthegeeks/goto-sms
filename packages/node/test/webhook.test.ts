@@ -7,6 +7,7 @@ import {
   checkWebhookSecret,
   disableWebhook,
   enableWebhook,
+  ensureWebhookSecret,
   parseWebhookEnvelope,
 } from '../src/inbound/webhook.js';
 import { startFakeGoTo } from './helpers/fake-goto.js';
@@ -131,6 +132,24 @@ test('enableWebhook generates the secret once; disableWebhook deletes, clears id
   const rotated = await store.get('t', 'inbound:webhookSecret');
   assert.match(rotated as string, /^[A-Za-z0-9_-]{43}$/);
   assert.notEqual(rotated, secret);
+});
+
+test('re-enable after disable makes a new channel for the rotated-secret URL', async () => {
+  const { fake, store, opts } = await setup();
+  const urlFor = async () => `${URL_}/${await ensureWebhookSecret(store, 't')}`;
+  const first = await urlFor();
+  assert.equal(await urlFor(), first, 'ensureWebhookSecret is stable');
+  await enableWebhook({ ...opts, webhookUrl: first });
+  await disableWebhook({ http: opts.http, store, tenant: 't' });
+  const second = await urlFor();
+  assert.notEqual(second, first);
+  await enableWebhook({ ...opts, webhookUrl: second });
+  assert.equal(channelPosts(fake).length, 2);
+  const urlOf = (c: (typeof fake.channels)[number]) =>
+    (c.webhookChannelData as { webhook: { url: string } }).webhook.url;
+  assert.equal(urlOf(fake.channels[1]!), second);
+  assert.equal(fake.subscriptions.length, 1);
+  assert.equal(fake.subscriptions[0]!.channelId, fake.channels[1]!.channelId);
 });
 
 test('disableWebhook ignores a 404 and works when never enabled', async () => {

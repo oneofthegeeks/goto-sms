@@ -92,10 +92,29 @@ export async function enableWebhook(o: {
   await o.store.set(o.tenant, KEY_CHANNEL, channelId);
   await o.store.set(o.tenant, KEY_SUBSCRIPTION, subscriptionId);
   await o.store.set(o.tenant, KEY_ACCOUNT, o.accountKey);
-  if ((await o.store.get(o.tenant, KEY_SECRET)) === undefined) {
-    await o.store.set(o.tenant, KEY_SECRET, newSecret());
-  }
+  await ensureWebhookSecret(o.store, o.tenant);
   return { channelId, subscriptionId };
+}
+
+/** The stored webhook path secret, or undefined if none was made yet. */
+export async function getWebhookSecret(
+  store: GoToSmsStore,
+  tenant: string,
+): Promise<string | undefined> {
+  const v = await store.get(tenant, KEY_SECRET);
+  return typeof v === 'string' && v !== '' ? v : undefined;
+}
+
+/**
+ * The webhook secret, created on first use. Callers need it before enableWebhook, because
+ * the webhook URL they pass in contains it.
+ */
+export async function ensureWebhookSecret(store: GoToSmsStore, tenant: string): Promise<string> {
+  const have = await getWebhookSecret(store, tenant);
+  if (have) return have;
+  const secret = newSecret();
+  await store.set(tenant, KEY_SECRET, secret);
+  return secret;
 }
 
 /**

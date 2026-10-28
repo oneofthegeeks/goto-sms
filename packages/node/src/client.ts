@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { join } from 'node:path';
-import { ConfigResolver, type ConfigField, type Source } from './config.js';
+import { ConfigResolver } from './config.js';
 import { GoToSmsError, NotConfiguredError, SendFailedError } from './errors.js';
 import { createGoToHttp, errorName, type GoToHttp } from './http.js';
 import { DEFAULT_REPLIES, type KeywordReplies } from './inbound/keywords.js';
@@ -14,6 +14,7 @@ import { GoToAuth } from './oauth.js';
 import { OptOuts } from './optouts.js';
 import { resolveEncryptionKey, SecretBox } from './secrets.js';
 import { Sender } from './send.js';
+import { buildStatus, type StatusPayload } from './server/status.js';
 import { FileStore } from './store/file.js';
 import type { GoToSmsStore } from './store/types.js';
 import type { FetchLike, InboundMessage, Logger, SendOptions, SendResult } from './types.js';
@@ -106,18 +107,6 @@ export interface Core {
   webhookUrl(secret: string): string | undefined;
 }
 
-/** Minimal status (auth + config). Task 12 replaces it with the full StatusPayload. */
-export interface GoToSmsStatus {
-  auth: { connected: boolean; loginExpired: boolean; refreshSource?: string };
-  config: {
-    sources: Record<ConfigField, Source>;
-    /** Which fields have a usable value. Values themselves (the secret) are never returned. */
-    set: Record<ConfigField, boolean>;
-    credentialsUnreadable: boolean;
-    invalidFromNumber?: true;
-  };
-}
-
 type Handler = (m: InboundMessage) => void;
 
 export interface GoToSms {
@@ -126,7 +115,11 @@ export interface GoToSms {
   on(ev: 'message', fn: Handler): this;
   off(ev: 'message', fn: Handler): this;
   optOuts: Pick<OptOuts, 'has' | 'add' | 'remove' | 'list'>;
-  status(): Promise<GoToSmsStatus>;
+  /**
+   * The setup page's status (the same payload as GET /api/status). Never throws for missing
+   * configuration: if startup failed for lack of an encryption key it reports not set up.
+   */
+  status(): Promise<StatusPayload>;
   /** Resolves after key resolution, the process lock, replayPending and poller start. */
   ready: Promise<void>;
   close(): Promise<void>;
@@ -419,23 +412,13 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       list: async () => (await coreReady).optOuts.list(),
     },
     async status() {
-      const c = await coreReady;
-      const auth = await c.auth.status();
-      const r = await c.config.resolve();
-      return {
-        auth,
-        config: {
-          sources: r.sources,
-          set: {
-            clientId: r.clientId !== undefined,
-            clientSecret: r.clientSecret !== undefined,
-            accountKey: r.accountKey !== undefined,
-            fromNumber: r.fromNumber !== undefined,
-          },
-          credentialsUnreadable: r.credentialsUnreadable,
-          ...(r.invalidFromNumber ? { invalidFromNumber: true as const } : {}),
-        },
-      };
+      let c: Core | undefined;
+      try {
+        c = await coreReady;
+      } catch (err) {
+        if (!(err instanceof NotConfiguredError)) throw err;
+      }
+      return buildStatus(options, c);
     },
     ready,
     async close() {
