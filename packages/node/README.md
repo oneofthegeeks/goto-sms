@@ -42,6 +42,10 @@ and webhook URL.
 `SendFailedError` (carrying the result) for flows like verification codes. `send()` rethrows
 startup errors other than `NotConfiguredError` (for example an unreadable store).
 
+`sms.status()` returns the setup page's status (configured, connected, ready, incoming mode), for
+a health check. Unlike the page's own `/api/status`, it leaves out the webhook URL, because that
+URL contains the webhook secret.
+
 ## Create the GoTo OAuth client
 
 At [developer.goto.com](https://developer.goto.com), create an OAuth client (authorization-code

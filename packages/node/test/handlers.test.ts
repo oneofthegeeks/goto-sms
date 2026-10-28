@@ -168,8 +168,13 @@ test('C22 /api/status never contains clientSecret or tokens', async () => {
   assert.equal(s.incoming.webhookUrl, `https://app.example/goto-sms/inbound/${secret}`);
   assert.equal(text.split(secret).length - 1, 1);
 
-  // sms.status() is built by the same code.
-  assert.deepEqual(await sms.status(), s);
+  // sms.status() is built by the same code, minus webhookUrl (R30): hosts may expose it
+  // without authorize, and the secret would let anyone post forged inbound texts.
+  const programmatic = await sms.status();
+  assert.equal(programmatic.incoming.webhookUrl, undefined);
+  assert.equal(JSON.stringify(programmatic).includes(secret), false);
+  const { webhookUrl: _shown, ...incoming } = s.incoming;
+  assert.deepEqual(programmatic, { ...s, incoming });
 });
 
 test('sms.status() answers configured:false/ready:false when startup failed for lack of a key', async () => {

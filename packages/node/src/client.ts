@@ -122,7 +122,8 @@ export interface GoToSms {
   off(ev: 'message', fn: Handler): this;
   optOuts: Pick<OptOuts, 'has' | 'add' | 'remove' | 'list'>;
   /**
-   * The setup page's status (the same payload as GET /api/status). Never throws for missing
+   * The setup page's status: the GET /api/status payload without `incoming.webhookUrl`, which
+   * holds the webhook secret and is shown only behind `authorize`. Never throws for missing
    * configuration: if startup failed for lack of an encryption key it reports not set up.
    */
   status(): Promise<StatusPayload>;
