@@ -163,8 +163,9 @@ A `dedupeKey` that already produced `sent` or `uncertain` returns the earlier re
 
 - **File store (default):** a JSON file at `<dataDir>/goto-sms.json`, written atomically. Pure JS,
   no native modules.
-- **SQLite:** for apps already using `better-sqlite3` (optional peer dependency, WAL). `better-sqlite3@13` needs
-  Node 22 or newer, and you need `@types/better-sqlite3` installed for the `SqliteStore` types.
+- **SQLite:** for apps already using `better-sqlite3` 11, 12 or 13 (optional peer dependency,
+  WAL). Versions 11 and 12 run on Node 20 or newer; 13 needs Node 22 or newer. You need
+  `@types/better-sqlite3` installed for the `SqliteStore` types.
 
   ```js
   import Database from 'better-sqlite3';
