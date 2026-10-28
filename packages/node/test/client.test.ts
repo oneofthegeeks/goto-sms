@@ -220,6 +220,14 @@ test('status: tokens sealed with an old key read as not connected and unreadable
   assert.equal(s.connected, false);
   assert.equal(s.credentialsUnreadable, true);
   assert.equal(s.ready, false);
+
+  // Reconnecting (what the page asks for) replaces the login and clears the state.
+  const state = new URL(await b.core.auth.startConnect()).searchParams.get('state')!;
+  await b.core.auth.finishConnect('code-ok', state);
+  const after = await b.status();
+  assert.equal(after.connected, true);
+  assert.equal(after.credentialsUnreadable, false);
+  assert.equal(after.ready, true);
 });
 
 test('default logger drops debug lines', async () => {

@@ -172,6 +172,8 @@ function renderBanner(s: Status): void {
     kind = 'bad';
     head = 'Credentials unreadable';
     text = UNREADABLE;
+    // Client secret readable (configured) means only the saved GoTo login is unreadable.
+    reconnect.hidden = !s.configured;
   } else if (s.loginExpired) {
     kind = 'bad';
     head = 'GoTo login expired';
