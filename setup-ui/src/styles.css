@@ -1,0 +1,372 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7;
+  --card: #ffffff;
+  --text: #1c1f24;
+  --muted: #5b6370;
+  --border: #d9dde3;
+  --accent: #1f5fd1;
+  --accent-text: #ffffff;
+  --ok: #17703a;
+  --ok-bg: #e6f4ea;
+  --warn: #8a5a00;
+  --warn-bg: #fff4d6;
+  --bad: #b3261e;
+  --bad-bg: #fde8e6;
+  --code-bg: #eef0f3;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317;
+    --card: #1b1e24;
+    --text: #e6e8eb;
+    --muted: #a1a8b3;
+    --border: #2e333b;
+    --accent: #6d9cf0;
+    --accent-text: #0b1220;
+    --ok: #7fd49a;
+    --ok-bg: #16301f;
+    --warn: #f0c564;
+    --warn-bg: #332810;
+    --bad: #f2a29b;
+    --bad-bg: #3a1714;
+    --code-bg: #262a31;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0 16px;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    15px/1.5 system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+  margin: 0 0 0.5rem;
+}
+h1 {
+  font-size: 1.5rem;
+}
+h2 {
+  font-size: 1.15rem;
+}
+h3 {
+  font-size: 1rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+
+/* Long URLs and GoTo error bodies must wrap, never push the page sideways. */
+.wrap,
+.msg,
+.scopes code,
+td.reason {
+  overflow-wrap: anywhere;
+}
+/* Other cells wrap only when a word can't fit, so numbers and dates stay whole. */
+td {
+  overflow-wrap: break-word;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0.5rem 0 0;
+  font-size: 0.85em;
+}
+
+.top,
+.grid,
+.foot {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.top {
+  padding: 1.5rem 0 1rem;
+}
+.top p {
+  margin: 0;
+}
+
+/* One column on phones; as many ~26rem columns as fit on wider screens. */
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr));
+  align-items: start;
+}
+.span {
+  grid-column: 1 / -1;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  min-width: 0;
+}
+
+.banner {
+  border-left: 6px solid var(--muted);
+}
+.banner.ok {
+  border-left-color: var(--ok);
+  background: var(--ok-bg);
+}
+.banner.warn {
+  border-left-color: var(--warn);
+  background: var(--warn-bg);
+}
+.banner.bad {
+  border-left-color: var(--bad);
+  background: var(--bad-bg);
+}
+.banner p {
+  margin: 0 0 0.5rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+.note {
+  border-left: 3px solid var(--warn);
+  padding-left: 0.75rem;
+  color: var(--muted);
+}
+.warn {
+  color: var(--warn);
+}
+
+.steps {
+  padding-left: 1.25rem;
+}
+.steps li {
+  margin-bottom: 0.5rem;
+}
+.scopes {
+  padding-left: 1.25rem;
+  margin: 0.25rem 0;
+}
+.copy-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.form {
+  display: grid;
+  gap: 0.75rem;
+}
+.field {
+  display: grid;
+  gap: 0.25rem;
+}
+.field[hidden] {
+  display: none;
+}
+label {
+  font-weight: 600;
+}
+.radios label {
+  font-weight: 400;
+  display: block;
+  padding: 0.25rem 0;
+}
+.radios label:has(input:disabled) {
+  color: var(--muted);
+}
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+}
+legend {
+  font-weight: 600;
+  padding: 0 0.25rem;
+}
+
+input:not([type='radio']),
+select {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+}
+input:disabled,
+select:disabled {
+  opacity: 0.7;
+}
+.locked {
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+button {
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  border-radius: 6px;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+}
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.msg {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+}
+.msg.ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.msg.bad {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+.split {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+}
+/* Wide screens: the message log gets more room than the opt-out list. */
+@media (min-width: 1100px) {
+  .split {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+}
+.split > div {
+  min-width: 0;
+}
+.row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  color: var(--muted);
+  font-weight: 600;
+}
+.inline {
+  margin-top: 0.75rem;
+}
+
+/* Narrow screens: each table row becomes a labelled card instead of a scroll box. */
+@media (max-width: 640px) {
+  table.stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  table.stack,
+  table.stack tbody,
+  table.stack tr,
+  table.stack td {
+    display: block;
+  }
+  table.stack tr {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.4rem 0.6rem;
+    margin-bottom: 0.5rem;
+  }
+  table.stack td {
+    border: 0;
+    padding: 0.15rem 0;
+    display: grid;
+    grid-template-columns: 6.5rem 1fr;
+    gap: 0.5rem;
+  }
+  table.stack td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-weight: 600;
+  }
+}
+
+.foot {
+  padding: 1.5rem 0 2rem;
+  color: var(--muted);
+  font-size: 0.85em;
+  text-align: center;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
