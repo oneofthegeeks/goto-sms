@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
-import { createGoToSms, type GoToSms } from '../src/client.js';
+import { createGoToSms, type GoToSms, type ResolvedOptions } from '../src/client.js';
+import { buildExpressRouter } from '../src/server/express.js';
 import { MemoryStore } from '../src/store/memory.js';
 import type { StatusPayload } from '../src/server/status.js';
 import { SETUP_HTML } from '../src/server/setup-html.generated.js';
@@ -209,4 +210,52 @@ test('authorize still applies when startup failed', async () => {
   const base = await listen(app);
   assert.equal((await fetch(`${base}/goto-sms/`)).status, 403);
   assert.equal((await fetch(`${base}/goto-sms/api/status`)).status, 403);
+});
+
+test("root mount '/': redirect URI and webhook URL have one slash, and no mount warning", async () => {
+  const { logger, lines } = recorder();
+  const { sms, base } = await mounted('/', { mountPath: '/', logger });
+  const status = (await (await fetch(`${base}/api/status`)).json()) as StatusPayload;
+  assert.equal(status.redirectUri, 'https://app.example/callback');
+  assert.equal(sms.core.webhookUrl('S'), 'https://app.example/inbound/S');
+  assert.equal(sms.core.options.mountPath, '');
+  assert.ok(!lines.some((l) => l.m.includes('mounted at')), 'no false mount warning');
+});
+
+test('publicUrl with a trailing slash and mountPath / → https://app.example/callback', async () => {
+  const fake = await startFakeGoTo();
+  cleanups.push(() => fake.close());
+  const sms = await connectedSms(fake, { publicUrl: 'https://app.example/', mountPath: '/' });
+  cleanups.push(() => sms.close());
+  assert.equal((await sms.status()).redirectUri, 'https://app.example/callback');
+  const defaults = await connectedSms(fake, { publicUrl: 'https://app.example/', mountPath: '' });
+  cleanups.push(() => defaults.close());
+  assert.equal((await defaults.status()).redirectUri, 'https://app.example/callback');
+});
+
+test('an error thrown while sending the response reaches the error handler', async () => {
+  const app = express();
+  // A BigInt makes res.json() throw before any header is sent.
+  const router = buildExpressRouter({
+    options: { mountPath: '' } as ResolvedOptions,
+    logger: silent,
+    handle: async () => ({ status: 200, json: { n: 1n } }),
+  });
+  app.use(router);
+  const base = await listen(app);
+  const res = await fetch(`${base}/api/status`, { signal: AbortSignal.timeout(2000) });
+  assert.equal(res.status, 500);
+  assert.equal(((await res.json()) as { error: string }).error, 'internal');
+});
+
+test('HEAD /callback does not consume the OAuth state', async () => {
+  const { sms, base } = await mounted('/goto-sms', { connect: false });
+  await sms.core.config.save({ clientId: 'cid', clientSecret: 'csecret' });
+  const state = new URL(await sms.core.auth.startConnect()).searchParams.get('state')!;
+  const url = `${base}/goto-sms/callback?code=code-ok&state=${encodeURIComponent(state)}`;
+  const head = await fetch(url, { method: 'HEAD', redirect: 'manual' });
+  assert.equal(head.status, 200);
+  const get = await fetch(url, { redirect: 'manual' });
+  assert.equal(get.status, 302);
+  assert.equal(get.headers.get('location'), './?connected=1');
 });

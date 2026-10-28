@@ -68,7 +68,7 @@ export interface GoToSmsOptions {
 export interface ResolvedOptions {
   /** No trailing slash; undefined when neither the option nor GOTO_SMS_PUBLIC_URL is set. */
   publicUrl?: string;
-  /** Leading slash, no trailing slash. */
+  /** Leading slash, no trailing slash; '' for the root mount (so URLs never get '//'). */
   mountPath: string;
   /** publicUrl + mountPath + '/callback', or undefined without a publicUrl. */
   redirectUri?: string;
@@ -161,8 +161,10 @@ function consoleLogger(): Logger {
 const isThenable = (v: unknown): v is PromiseLike<unknown> =>
   typeof v === 'object' && v !== null && typeof (v as { then?: unknown }).then === 'function';
 
+/** '/goto-sms/' → '/goto-sms', 'sms' → '/sms'; '/' and '' → '' (the root mount). */
 function normalizeMount(p: string): string {
   const trimmed = p.replace(/\/+$/, '');
+  if (trimmed === '') return '';
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
 

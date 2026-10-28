@@ -82,8 +82,14 @@ export function buildExpressRouter(src: RouterSource, o: { inboundOnly?: boolean
     if (!warned && req.baseUrl !== mountPath) {
       warned = true;
       src.logger.warn(
-        `goto-sms: mounted at ${req.baseUrl} but mountPath option is ${mountPath}; the redirect URI shown will be wrong`,
+        `goto-sms: mounted at ${req.baseUrl || '/'} but mountPath option is ${mountPath || '/'}; the redirect URI shown will be wrong`,
       );
+    }
+    // A HEAD (link prefetchers, scanners) must not consume the single-use OAuth state.
+    if (req.method === 'HEAD' && req.path === '/callback') {
+      res.set('Cache-Control', 'no-store');
+      res.status(200).end();
+      return;
     }
     const method = req.method === 'HEAD' ? 'GET' : req.method; // Express drops HEAD bodies
     // `/goto-sms` → `./goto-sms/`, so the page's relative URLs resolve under the mount. Kept
@@ -102,7 +108,12 @@ export function buildExpressRouter(src: RouterSource, o: { inboundOnly?: boolean
       body: req.body as unknown,
       raw: req,
     };
-    src.handle(r).then((out) => send(res, out), next);
+    // .catch after .then, so a throwing send() (e.g. res.json) also reaches next() instead of
+    // becoming an unhandled rejection that would crash the host.
+    src
+      .handle(r)
+      .then((out) => send(res, out))
+      .catch(next);
   });
   // Body-parser failures as the contract's JSON errors, instead of Express's HTML page.
   router.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
