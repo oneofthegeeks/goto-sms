@@ -57,7 +57,8 @@ export interface StatusPayload {
     canWebhook: boolean;
     /**
      * Set when the account changed in webhook mode and moving the subscription failed:
-     * texts to the selected account aren't arriving. Cleared by a successful mode switch.
+     * texts to the selected account aren't arriving. Cleared by a successful mode switch or a
+     * successful move to the account (including the page's retry).
      */
     error?: IncomingError;
   };

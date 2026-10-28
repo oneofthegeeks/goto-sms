@@ -137,6 +137,13 @@ async function subscribeWebhook(core: Core): Promise<void> {
   if (!accountKey) {
     throw new GoToSmsError('Pick a GoTo account before turning on webhooks', 'not_configured');
   }
+  // A subscription still stored for another account (a move whose DELETE failed) would keep
+  // delivering once we subscribe on this one, so it goes first. If this DELETE fails too, it
+  // throws before anything new is created and the caller's error state stays visible.
+  const storedAccount = await getWebhookAccount(store, tenant);
+  if (storedAccount && storedAccount !== accountKey) {
+    await disableWebhook({ http, store, tenant, rotateSecret: false });
+  }
   // The URL embeds the secret, so it has to exist before GoTo is told the URL.
   const secret = await ensureWebhookSecret(store, tenant);
   await enableWebhook({
@@ -186,8 +193,7 @@ async function followAccount(core: Core): Promise<void> {
   const { accountKey } = await core.config.resolve();
   if (accountKey === (await getWebhookAccount(store, tenant))) return;
   try {
-    await disableWebhook({ http, store, tenant, rotateSecret: false });
-    await subscribeWebhook(core);
+    await subscribeWebhook(core); // deletes the old account's subscription first
     await store.delete(tenant, INBOUND_ERROR);
   } catch (err) {
     const { error, message, gotoStatus } = errorResponse(
