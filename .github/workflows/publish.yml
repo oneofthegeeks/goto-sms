@@ -18,6 +18,16 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      # Refuse to publish when the tag (minus the leading v) isn't the package version.
+      - name: Check the tag matches packages/node/package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(node -p "require('./packages/node/package.json').version")
+          if [ "${TAG#v}" != "$VERSION" ]; then
+            echo "::error::Tag $TAG does not match packages/node/package.json version $VERSION"
+            exit 1
+          fi
       - run: npm ci
       # Root build: builds setup-ui first, then packages/node (which embeds the real page).
       - run: npm run build
