@@ -12,7 +12,11 @@ implements exactly this. The Node reference is `packages/node/src/server/handler
   `https://x.example` mounted at `/admin/tools/sms` gives
   `https://x.example/admin/tools/sms/callback`.
 - The webhook URL is `publicUrl + mountPath + "/inbound/" + secret`.
-- Request bodies are JSON objects; a missing body counts as `{}`.
+- Request bodies are JSON objects (at most 100 kB); a missing body counts as `{}`.
+- A request for the mount itself without a trailing slash (`/goto-sms`) is redirected (`302`) to
+  `./goto-sms/` (the last path segment plus `/`, query kept), so the page's relative URLs resolve
+  under the mount. The Location is relative so it survives a proxy that strips a path prefix.
+- `HEAD` is answered as `GET` (headers only).
 - JSON responses use `200` unless stated. Header names are matched case-insensitively.
 
 ## Authentication
@@ -47,6 +51,7 @@ Every JSON error is `{ "error": "<code>", "message": "<human text>" }`.
 | 403    | `forbidden`, `cross_origin`                                                                                           | see Authentication                                     |
 | 404    | `not_found`                                                                                                           | unknown route                                          |
 | 409    | `locked`                                                                                                              | a field set by options/env was given a non-empty value |
+| 413    | `too_large`                                                                                                           | the body is over 100 kB                                |
 | 502    | `goto_api`                                                                                                            | GoTo answered with an error (body below)               |
 | 503    | `temporary`                                                                                                           | GoTo timed out or the network failed                   |
 | 500    | `internal`                                                                                                            | anything else; the message is generic                  |
@@ -108,11 +113,29 @@ Returned by `GET /api/status` and by every state-changing route marked "returns 
     "messaging.v1.notifications.manage",
     "voice-admin.v1.read",
   ],
+  "startupError": "…", // optional: only when startup failed; a fixed, secret-free reason
 }
 ```
 
-If the package could not start for lack of configuration (for example no encryption key), the
-status still answers, with `configured`, `connected` and `ready` false and every source `"unset"`.
+If the package could not start (for example no encryption key), the status still answers, with
+`configured`, `connected` and `ready` false, every source `"unset"`, and `startupError` saying why
+(the package's own message, or only the error's name for anything else).
+
+## When startup failed
+
+The routes still answer, so the admin can see why on the page. `authorize` and the same-origin
+check apply as usual. `GET /` serves the page and `GET /api/status` the status above; every other
+`/api/*` route gives `400 not_configured` with `startupError` as the message; `GET /callback`
+redirects to `./?error=not_configured`; `POST /inbound/:secret` gives `404`.
+
+## Routers
+
+A package exposes two mountable routers:
+
+- the full router (Node: `sms.router()`): every route below. Creating it throws without
+  `authorize` (see Authentication). It can be created before startup finishes; requests wait.
+- the webhook-only router (Node: `sms.webhookRouter()`): only `POST /inbound/:secret`; every other
+  request falls through to the host. It needs no `authorize`, because the webhook is exempt.
 
 ## Routes
 

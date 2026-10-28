@@ -10,5 +10,7 @@ export default defineConfig({
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,
+  // import.meta.url in CJS output (express.ts loads express lazily via createRequire).
+  shims: true,
   define: { __VERSION__: JSON.stringify(pkg.version) },
 });

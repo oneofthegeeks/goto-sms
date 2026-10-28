@@ -2,6 +2,8 @@
 // Type-only imports from client.ts, so there is no runtime import cycle.
 import type { Core, IncomingMode, ResolvedOptions } from '../client.js';
 import type { ConfigField, Source } from '../config.js';
+import { GoToSmsError } from '../errors.js';
+import { errorName } from '../http.js';
 import { getWebhookSecret } from '../inbound/webhook.js';
 import { VERSION } from '../types.js';
 
@@ -42,6 +44,18 @@ export interface StatusPayload {
     canWebhook: boolean;
   };
   requiredScopes: string[];
+  /** Why startup failed (e.g. no encryption key), when it did. Secret-free. */
+  startupError?: string;
+}
+
+/**
+ * A secret-free description of a startup failure. Package errors carry fixed messages;
+ * anything else is named only, since its message could hold a path or a value.
+ */
+export function startupErrorText(err: unknown): string {
+  return err instanceof GoToSmsError
+    ? err.message
+    : `goto-sms failed to start (${errorName(err)}); see the server logs`;
 }
 
 const UNSET: Record<ConfigField, Source> = {
@@ -51,8 +65,15 @@ const UNSET: Record<ConfigField, Source> = {
   fromNumber: 'unset',
 };
 
-/** Without a core (startup failed for lack of configuration) everything reads as not set up. */
-export async function buildStatus(options: ResolvedOptions, core?: Core): Promise<StatusPayload> {
+/**
+ * Without a core (startup failed, e.g. for lack of configuration) everything reads as not set
+ * up, with `startupError` saying why.
+ */
+export async function buildStatus(
+  options: ResolvedOptions,
+  core?: Core,
+  startupError?: string,
+): Promise<StatusPayload> {
   const base = {
     version: VERSION,
     redirectUri: options.redirectUri ?? '',
@@ -69,6 +90,7 @@ export async function buildStatus(options: ResolvedOptions, core?: Core): Promis
       ready: false,
       sources: { ...UNSET },
       incoming: { mode: 'off', canWebhook },
+      ...(startupError ? { startupError } : {}),
     };
   }
 
