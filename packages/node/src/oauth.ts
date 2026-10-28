@@ -205,13 +205,26 @@ export class GoToAuth {
   async status(): Promise<{
     connected: boolean;
     loginExpired: boolean;
+    /** Present when a login is stored but can't be decrypted (the encryption key changed). */
+    tokensUnreadable?: true;
     refreshSource?: RefreshSource;
   }> {
     const tokens = await this.readTokens();
     const loginExpired = await this.loginExpired();
+    // A login sealed with another key fails every send, so it must not count as connected.
+    let tokensUnreadable = false;
+    if (tokens) {
+      try {
+        this.openToken(tokens.refresh);
+      } catch (err) {
+        if (!(err instanceof NotConfiguredError)) throw err;
+        tokensUnreadable = true;
+      }
+    }
     return {
-      connected: tokens !== undefined && !loginExpired,
+      connected: tokens !== undefined && !loginExpired && !tokensUnreadable,
       loginExpired,
+      ...(tokensUnreadable ? { tokensUnreadable: true as const } : {}),
       ...(tokens ? { refreshSource: tokens.source } : {}),
     };
   }
@@ -334,7 +347,7 @@ export class GoToAuth {
 
   private async markLoginExpired(): Promise<void> {
     await this.store.set(this.tenant, 'login_expired', true);
-    this.logger.debug('goto-sms: GoTo refused the refresh token; login marked expired');
+    this.logger.warn('goto-sms: GoTo refused the refresh token; login marked expired');
   }
 
   private async loginExpired(): Promise<boolean> {

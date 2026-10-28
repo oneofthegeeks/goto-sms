@@ -202,3 +202,33 @@ test('default logger is console with a [goto-sms] prefix', async () => {
   assert.equal(typeof err.args[1], 'string');
   assert.equal((err.args[1] as string).startsWith('goto-sms:'), false, 'no doubled prefix');
 });
+
+test('status: tokens sealed with an old key read as not connected and unreadable', async () => {
+  const fake = await fakeGoTo();
+  const store = new MemoryStore();
+  const a = await connectedSms(fake, { store });
+  assert.equal((await a.status()).ready, true);
+  await a.close();
+
+  // The encryption key changed and the admin re-entered the client secret, but the stored
+  // GoTo login was sealed with the old key: sends would fail, so status must not say ready.
+  const b = await connectedSms(fake, { store, encryptionKey: 'another-key', connect: false });
+  cleanups.push(() => b.close());
+  await b.core.config.save({ clientId: 'cid', clientSecret: 'csecret', fromNumber: FROM });
+  const s = await b.status();
+  assert.equal(s.configured, true);
+  assert.equal(s.connected, false);
+  assert.equal(s.credentialsUnreadable, true);
+  assert.equal(s.ready, false);
+});
+
+test('default logger drops debug lines', async () => {
+  const consoleCalls = captureConsole();
+  const sms = createGoToSms({ store: new MemoryStore(), encryptionKey: 'k', env: {} });
+  await sms.ready;
+  sms.core.logger.debug('goto-sms: polling skipped; no sending number chosen');
+  sms.core.logger.warn('goto-sms: shown');
+  await sms.close();
+  assert.ok(!consoleCalls.some((c) => c.level === 'debug'));
+  assert.ok(consoleCalls.some((c) => c.level === 'warn'));
+});

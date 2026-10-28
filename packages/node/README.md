@@ -92,7 +92,7 @@ page instead.
 Other options: `mountPath`, `dataDir` (default `./data`), `store`, `tenant` (default `"default"`),
 `logOnly`, `replies` (`{ stop, start, help }` text), `yesIsOptIn` (default true), `pollIntervalMs`
 (default 30 s), `sendTimeoutMs` (default 10 s), `inboundPerHour` (default 10), `logRetentionDays`
-(default 90), `logger` (default `console`; `false` silences), `fetch`, `authBaseUrl`,
+(default 90), `logger` (default `console` without debug lines; pass your own `{ debug, info, warn, error }` to see them, or `false` to silence), `fetch`, `authBaseUrl`,
 `apiBaseUrl`, `env`.
 
 **Encryption key.** The client secret and tokens are encrypted at rest with AES-256-GCM. Set
