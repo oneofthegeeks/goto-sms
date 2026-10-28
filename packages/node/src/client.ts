@@ -51,6 +51,12 @@ export interface GoToSmsOptions {
   tenant?: string;
   authorize?: Authorize;
   allowUnauthenticatedSetup?: boolean;
+  /** Where the setup page's "← Back to …" link goes: an http(s) URL or a relative path. */
+  backUrl?: string;
+  /** The link's name, as in "Back to Spring Ideas"; default 'the app'. Ignored without backUrl. */
+  backLabel?: string;
+  /** Where an unauthorized page load is redirected (302) instead of a 403; same rules as backUrl. */
+  loginUrl?: string;
   clientId?: string;
   clientSecret?: string;
   accountKey?: string;
@@ -83,6 +89,9 @@ export interface ResolvedOptions {
   dataDir?: string;
   authorize?: Authorize;
   allowUnauthenticatedSetup: boolean;
+  /** The setup page's back link, when backUrl is set. */
+  back?: { url: string; label: string };
+  loginUrl?: string;
   logOnly: boolean;
   replies: KeywordReplies;
   yesIsOptIn: boolean;
@@ -180,6 +189,33 @@ function normalizeMount(p: string): string {
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
 
+/**
+ * A link option the page renders as an href (backUrl) or the server redirects to (loginUrl):
+ * only an absolute http(s) URL or a same-origin relative path. Rejects `javascript:`, `data:`
+ * and the like, and protocol-relative `//host` (or `/\host`), which leaves the site.
+ */
+function linkOption(name: string, raw: string | undefined): string | undefined {
+  const v = configValue(raw);
+  if (v === undefined) return undefined;
+  const base = 'http://relative.invalid';
+  let url: URL | undefined;
+  try {
+    url = new URL(v, base);
+  } catch {
+    url = undefined;
+  }
+  // Whitespace or control characters can hide a scheme from a human reader; never needed.
+  // eslint-disable-next-line no-control-regex
+  const plain = !/[\s\x00-\x1f\x7f]/.test(v);
+  const relative = url?.origin === base;
+  const absolute =
+    /^https?:\/\//i.test(v) && (url?.protocol === 'http:' || url?.protocol === 'https:');
+  if (!plain || !url || !(relative || absolute)) {
+    throw new Error(`goto-sms: ${name} must be an http(s) URL or a relative path`);
+  }
+  return v;
+}
+
 export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
   const env = o.env ?? process.env;
   const now = o.now ?? Date.now;
@@ -188,6 +224,8 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
   const publicUrlRaw = configValue(o.publicUrl) ?? configValue(env.GOTO_SMS_PUBLIC_URL);
   const publicUrl = publicUrlRaw ? publicUrlRaw.replace(/\/+$/, '') : undefined;
   const mountPath = o.mountPath === undefined ? '/goto-sms' : normalizeMount(o.mountPath);
+  const backUrl = linkOption('backUrl', o.backUrl);
+  const loginUrl = linkOption('loginUrl', o.loginUrl);
   // A custom store and no dataDir means there is nowhere for a keyfile: the key must then
   // come from the option or env (resolveEncryptionKey throws NotConfiguredError).
   const dataDir = o.dataDir ?? (o.store ? undefined : './data');
@@ -197,6 +235,8 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
     ...(dataDir !== undefined ? { dataDir } : {}),
     ...(o.authorize ? { authorize: o.authorize } : {}),
     allowUnauthenticatedSetup: o.allowUnauthenticatedSetup ?? false,
+    ...(backUrl ? { back: { url: backUrl, label: configValue(o.backLabel) ?? 'the app' } } : {}),
+    ...(loginUrl ? { loginUrl } : {}),
     logOnly: o.logOnly ?? false,
     replies: { ...DEFAULT_REPLIES, ...o.replies },
     yesIsOptIn: o.yesIsOptIn ?? true,

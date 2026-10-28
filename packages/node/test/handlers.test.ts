@@ -678,3 +678,70 @@ test('retry after a failed move: a second failed DELETE creates nothing and keep
   const status = (await handle(req('GET', '/api/status'))).json as StatusPayload;
   assert.equal(status.incoming.error?.gotoStatus, 500);
 });
+
+test('backUrl/backLabel: status carries back { url, label }; label defaults to "the app"', async () => {
+  const { handle, sms } = await setup({ backUrl: '/admin', backLabel: 'Spring Ideas' });
+  const s = (await handle(req('GET', '/api/status'))).json as StatusPayload;
+  assert.deepEqual(s.back, { url: '/admin', label: 'Spring Ideas' });
+  assert.deepEqual((await sms.status()).back, { url: '/admin', label: 'Spring Ideas' });
+
+  const fake = await fakeGoTo();
+  const plain = await connectedSms(fake, { backUrl: 'https://app.example/' });
+  cleanups.push(() => plain.close());
+  assert.deepEqual((await plain.status()).back, { url: 'https://app.example/', label: 'the app' });
+  const none = await connectedSms(fake, { backLabel: 'ignored without a url' });
+  cleanups.push(() => none.close());
+  assert.equal((await none.status()).back, undefined);
+});
+
+test('backUrl and loginUrl must be http(s) or a relative path; anything else throws at creation', () => {
+  const make = (o: { backUrl?: string; loginUrl?: string }) =>
+    createGoToSms({ store: new MemoryStore(), encryptionKey: 'k', env: {}, logger: silent, ...o });
+  const bad = [
+    'javascript:alert(1)',
+    ' JaVaScript:alert(1)',
+    'java\tscript:alert(1)',
+    'data:text/html,hi',
+    'mailto:x@example.com',
+    '//evil.example',
+    '/\\evil.example',
+    'https:evil.example',
+  ];
+  for (const url of bad) {
+    assert.throws(
+      () => make({ backUrl: url }),
+      /backUrl must be an http\(s\) URL or a relative path/,
+      url,
+    );
+    assert.throws(
+      () => make({ loginUrl: url }),
+      /loginUrl must be an http\(s\) URL or a relative path/,
+      url,
+    );
+  }
+  for (const url of [
+    '/',
+    '/login?next=%2Fadmin',
+    '../app',
+    'home',
+    'https://app.example/x',
+    'http://localhost:3000/',
+  ]) {
+    void make({ backUrl: url, loginUrl: url }).close();
+  }
+});
+
+test('loginUrl: an unauthorized GET / redirects there; API routes stay 403', async () => {
+  const { handle } = await setup({ authorize: () => false, loginUrl: '/login?next=%2Fgoto' });
+  const page = await handle(req('GET', '/'));
+  assert.equal(page.status, 302);
+  assert.equal(page.redirect, '/login?next=%2Fgoto');
+  for (const [method, path] of API_ROUTES.filter(([, p]) => p !== '/')) {
+    const r = await handle(req(method, path, { body: {} }));
+    assert.equal(r.status, 403, `${method} ${path}`);
+    assert.equal(r.redirect, undefined);
+  }
+  // Without loginUrl the page is a plain 403.
+  const { handle: plain } = await setup({ authorize: () => false });
+  assert.equal((await plain(req('GET', '/'))).status, 403);
+});

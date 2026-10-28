@@ -262,3 +262,21 @@ test('HEAD /callback does not consume the OAuth state', async () => {
   assert.equal(get.status, 302);
   assert.equal(get.headers.get('location'), './?connected=1');
 });
+
+test('loginUrl: an unauthorized page load redirects, also when startup failed; the API stays 403', async () => {
+  const sms = createGoToSms({
+    store: new MemoryStore(),
+    env: {},
+    logger: silent,
+    authorize: () => false,
+    loginUrl: '/login',
+  });
+  cleanups.push(() => sms.close());
+  const app = express();
+  app.use('/goto-sms', sms.router());
+  const base = await listen(app);
+  const page = await fetch(`${base}/goto-sms/`, { redirect: 'manual' });
+  assert.equal(page.status, 302);
+  assert.equal(page.headers.get('location'), '/login');
+  assert.equal((await fetch(`${base}/goto-sms/api/status`)).status, 403);
+});
