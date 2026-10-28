@@ -240,3 +240,16 @@ test('default logger drops debug lines', async () => {
   assert.ok(!consoleCalls.some((c) => c.level === 'debug'));
   assert.ok(consoleCalls.some((c) => c.level === 'warn'));
 });
+
+test('a CHANGEME or blank publicUrl counts as unset; the env value then applies', async () => {
+  const fake = await fakeGoTo();
+  const a = await connectedSms(fake, {
+    publicUrl: 'CHANGEME',
+    env: { GOTO_SMS_PUBLIC_URL: 'https://env.example' },
+  });
+  cleanups.push(() => a.close());
+  assert.equal((await a.status()).redirectUri, 'https://env.example/goto-sms/callback');
+  const b = await connectedSms(fake, { publicUrl: ' ', env: { GOTO_SMS_PUBLIC_URL: 'changeme' } });
+  cleanups.push(() => b.close());
+  assert.equal((await b.status()).redirectUri, '');
+});

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Router } from 'express';
 import { join } from 'node:path';
-import { ConfigResolver } from './config.js';
+import { ConfigResolver, configValue } from './config.js';
 import { GoToSmsError, NotConfiguredError, SendFailedError } from './errors.js';
 import { createGoToHttp, errorName, type GoToHttp } from './http.js';
 import { DEFAULT_REPLIES, type KeywordReplies } from './inbound/keywords.js';
@@ -177,7 +177,7 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
   const now = o.now ?? Date.now;
   const logger = o.logger === false ? silentLogger : (o.logger ?? consoleLogger());
   const tenant = o.tenant ?? 'default';
-  const publicUrlRaw = o.publicUrl ?? env.GOTO_SMS_PUBLIC_URL;
+  const publicUrlRaw = configValue(o.publicUrl) ?? configValue(env.GOTO_SMS_PUBLIC_URL);
   const publicUrl = publicUrlRaw ? publicUrlRaw.replace(/\/+$/, '') : undefined;
   const mountPath = o.mountPath === undefined ? '/goto-sms' : normalizeMount(o.mountPath);
   // A custom store and no dataDir means there is nowhere for a keyfile: the key must then

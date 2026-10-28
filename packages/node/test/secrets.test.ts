@@ -117,3 +117,25 @@ test('keyfile of the wrong length is an error, not regenerated', async () => {
 test('no key and no dataDir throws NotConfiguredError', async () => {
   await assert.rejects(resolveEncryptionKey({ env: {}, logger }), NotConfiguredError);
 });
+
+test('a CHANGEME or blank key is not used as the key', async () => {
+  const dataDir = await tmp();
+  for (const placeholder of ['CHANGEME', 'changeme', '  ', '']) {
+    const r = await resolveEncryptionKey({
+      optionKey: placeholder,
+      env: { GOTO_SMS_ENCRYPTION_KEY: placeholder },
+      dataDir,
+      logger,
+    });
+    assert.equal(r.source, 'keyfile');
+  }
+  await assert.rejects(
+    resolveEncryptionKey({ env: { GOTO_SMS_ENCRYPTION_KEY: 'CHANGEME' }, logger }),
+    NotConfiguredError,
+  );
+});
+
+test('a real key is hashed untrimmed', async () => {
+  const r = await resolveEncryptionKey({ env: { GOTO_SMS_ENCRYPTION_KEY: ' k ' }, logger });
+  assert.deepEqual(r.key, createHash('sha256').update(' k ', 'utf8').digest());
+});

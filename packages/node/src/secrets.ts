@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { configValue } from './config.js';
 import { DecryptError, GoToSmsError, NotConfiguredError } from './errors.js';
 import type { Logger } from './types.js';
 
@@ -55,8 +56,9 @@ export async function resolveEncryptionKey(o: {
   dataDir?: string;
   logger: Logger;
 }): Promise<{ key: Buffer; source: 'option' | 'env' | 'keyfile' }> {
-  if (o.optionKey) return { key: sha256(o.optionKey), source: 'option' };
-  const envKey = o.env.GOTO_SMS_ENCRYPTION_KEY;
+  const optionKey = configValue(o.optionKey);
+  if (optionKey) return { key: sha256(optionKey), source: 'option' };
+  const envKey = configValue(o.env.GOTO_SMS_ENCRYPTION_KEY);
   if (envKey) return { key: sha256(envKey), source: 'env' };
   if (!o.dataDir) {
     throw new NotConfiguredError('Set GOTO_SMS_ENCRYPTION_KEY (required when no dataDir is used)');
