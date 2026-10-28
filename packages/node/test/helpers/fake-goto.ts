@@ -51,6 +51,16 @@ export interface FakeGoTo {
    */
   numbersPages: unknown[][];
   inbound: Array<{ id: string; from: string; to: string; body: string; timestamp: string }>;
+  /** Notification channels (party-invites subscribeInbound); `channelId` is `ch-<n>`. */
+  channels: Array<{ channelId: string; channelType: string; webhookChannelData?: unknown }>;
+  /** Messaging subscriptions; `id` is `sub-<n>`. */
+  subscriptions: Array<{
+    id: string;
+    accountKey: string;
+    ownerEntityType: string;
+    channelId: string;
+    eventTypes: string[];
+  }>;
   /**
    * Register a handler. The longest matching prefix wins. API routes require a bearer
    * token from `tokens.valid` (else 401) unless `{ auth: false }`.
@@ -79,6 +89,8 @@ export async function startFakeGoTo(
     requests: [],
     sent: [],
     inbound: [],
+    channels: [],
+    subscriptions: [],
     me: {
       'urn:scim:schemas:extension:getgo:1.0': {
         accounts: [{ value: 'acct-1', display: 'Test Account' }],
@@ -167,6 +179,41 @@ export async function startFakeGoTo(
   fake.route('POST', '/messaging/v1/messages', (req) => {
     fake.sent.push(JSON.parse(req.body) as FakeGoTo['sent'][number]);
     return { status: 200, body: { id: `msg-${fake.sent.length}` } };
+  });
+
+  // --- API: notification channels + subscriptions (party-invites subscribeInbound) ---
+  fake.route('GET', '/notification-channel/v1/channels', () => ({
+    status: 200,
+    body: { items: fake.channels },
+  }));
+  fake.route('POST', '/notification-channel/v1/channels/', (req) => {
+    const channel = {
+      ...(JSON.parse(req.body) as { channelType: string }),
+      channelId: `ch-${fake.channels.length + 1}`,
+    };
+    fake.channels.push(channel);
+    return { status: 200, body: channel };
+  });
+  fake.route('GET', '/messaging/v2/subscriptions', (req) => ({
+    status: 200,
+    body: {
+      items: fake.subscriptions.filter((s) => s.accountKey === req.query.get('accountKey')),
+    },
+  }));
+  fake.route('POST', '/messaging/v2/subscriptions', (req) => {
+    const sub = {
+      ...(JSON.parse(req.body) as Omit<FakeGoTo['subscriptions'][number], 'id'>),
+      id: `sub-${fake.subscriptions.length + 1}`,
+    };
+    fake.subscriptions.push(sub);
+    return { status: 200, body: sub };
+  });
+  fake.route('DELETE', '/messaging/v2/subscriptions/', (req) => {
+    const id = req.pathname.slice('/messaging/v2/subscriptions/'.length);
+    const i = fake.subscriptions.findIndex((s) => s.id === id);
+    if (i === -1) return { status: 404, body: { error: 'not_found' } };
+    fake.subscriptions.splice(i, 1);
+    return { status: 204 };
   });
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
