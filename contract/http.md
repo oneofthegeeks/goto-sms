@@ -236,7 +236,7 @@ status still answers, with `configured`, `connected` and `ready` false and every
 
 - Auth: exempt; authenticated by the path secret, compared in constant time.
 - Request: GoTo's webhook envelope (parsed loosely).
-- Response, no body in every case:
+- Response (no body, except the `400` below):
   - `404` when incoming mode isn't `webhook`, or the secret is wrong;
   - `204` for anything that isn't an inbound text (GoTo sends other event types), and for a
     duplicate of an already-received message;

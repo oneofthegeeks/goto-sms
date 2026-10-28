@@ -171,13 +171,16 @@ async function inbound(core: Core, secret: string, body: unknown): Promise<HttpR
   if (fresh) {
     // After the response has gone out; process() leaves the row pending if it fails, and
     // the background replay retries it. Only the error's name is logged (no message text).
-    setImmediate(() => {
-      core.processor.process(message.id).catch((err: unknown) => {
+    // Registered on core.inflight now (before the 204) so close() waits for it.
+    const job: Promise<void> = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(() => core.processor.process(message.id))
+      .catch((err: unknown) => {
         core.logger.error('goto-sms: processing an inbound text failed', {
           error: errorName(err),
         });
-      });
-    });
+      })
+      .finally(() => core.inflight.delete(job));
+    core.inflight.add(job);
   }
   return { status: 204 };
 }

@@ -105,6 +105,8 @@ export interface Core {
   incomingMode(): Promise<IncomingMode>;
   /** publicUrl + mountPath + '/inbound/' + secret, or undefined without a publicUrl. */
   webhookUrl(secret: string): string | undefined;
+  /** Background work started by handlers (post-204 inbound processing); close() awaits it. */
+  inflight: Set<Promise<void>>;
 }
 
 type Handler = (m: InboundMessage) => void;
@@ -339,6 +341,7 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       poller,
       logger,
       options,
+      inflight: new Set(),
       async incomingMode() {
         const mode = await store.get(tenant, 'inbound:mode');
         return mode === 'webhook' || mode === 'polling' ? mode : 'off';
@@ -431,6 +434,7 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       c.poller.stop();
       // Wait for in-flight work so nothing writes to the store after close() resolves.
       await c.poller.idle();
+      await Promise.allSettled([...c.inflight]);
       await maintaining;
       // Release the lock only if it's still ours.
       const lock = await c.store.get(tenant, LOCK_KEY);
