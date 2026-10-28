@@ -20,6 +20,8 @@ export interface FakeResponse {
   status: number;
   /** Serialized as JSON unless it's a string; omitted → empty body. */
   body?: unknown;
+  /** Sent as the Location header (redirects). */
+  location?: string;
 }
 
 export type FakeHandler = (req: FakeRequest) => FakeResponse | Promise<FakeResponse>;
@@ -85,7 +87,7 @@ export interface FakeGoTo {
 const token = () => randomBytes(16).toString('hex');
 
 export async function startFakeGoTo(
-  opts: { clientId?: string; clientSecret?: string } = {},
+  opts: { clientId?: string; clientSecret?: string; port?: number } = {},
 ): Promise<FakeGoTo> {
   const clientId = opts.clientId ?? 'cid';
   const clientSecret = opts.clientSecret ?? 'csecret';
@@ -172,6 +174,21 @@ export async function startFakeGoTo(
         return issue(fake.tokens.refresh);
       }
       return { status: 400, body: { error: 'unsupported_grant_type' } };
+    },
+    { auth: false },
+  );
+
+  // --- /oauth/authorize: the browser step. Approves at once with code-ok (e2e only). ---
+  fake.route(
+    'GET',
+    '/oauth/authorize',
+    (req) => {
+      const redirect = req.query.get('redirect_uri');
+      if (!redirect) return { status: 400, body: { error: 'invalid_request' } };
+      const back = new URL(redirect);
+      back.searchParams.set('code', 'code-ok');
+      back.searchParams.set('state', req.query.get('state') ?? '');
+      return { status: 302, location: back.toString() };
     },
     { auth: false },
   );
@@ -293,7 +310,10 @@ export async function startFakeGoTo(
     const send = (r: FakeResponse) => {
       const text =
         r.body === undefined ? '' : typeof r.body === 'string' ? r.body : JSON.stringify(r.body);
-      res.writeHead(r.status, text ? { 'content-type': 'application/json' } : {});
+      res.writeHead(r.status, {
+        ...(text ? { 'content-type': 'application/json' } : {}),
+        ...(r.location ? { location: r.location } : {}),
+      });
       res.end(text);
     };
 
@@ -332,7 +352,7 @@ export async function startFakeGoTo(
       res.end(String(err));
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(opts.port ?? 0, '127.0.0.1', resolve));
   fake.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return fake;
 }

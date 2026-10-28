@@ -8,3 +8,4 @@ test-results/
 .superpowers/
 # Generated from setup-ui/dist by packages/node/scripts/embed-setup.mjs
 packages/node/src/server/setup-html.generated.ts
+playwright-report/
