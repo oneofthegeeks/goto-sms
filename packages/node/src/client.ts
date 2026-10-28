@@ -144,7 +144,10 @@ export interface GoToSms {
 
 const silentLogger: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 
-/** console with a `[goto-sms]` prefix (modules' own "goto-sms: " prefix is dropped). */
+/**
+ * console with a `[goto-sms]` prefix (modules' own "goto-sms: " prefix is dropped). Debug
+ * lines are dropped (console.debug always prints in Node); pass your own logger to see them.
+ */
 function consoleLogger(): Logger {
   const line =
     (write: (...a: unknown[]) => void) =>
@@ -152,7 +155,7 @@ function consoleLogger(): Logger {
       write('[goto-sms]', m.replace(/^goto-sms: /, ''), ...(x ? [x] : []));
     };
   return {
-    debug: line(console.debug),
+    debug() {},
     info: line(console.info),
     warn: line(console.warn),
     error: line(console.error),

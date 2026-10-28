@@ -93,7 +93,7 @@ Returned by `GET /api/status` and by every state-changing route marked "returns 
   "configured": true, // a readable client ID and client secret are available
   "connected": true, // a GoTo login is stored and not expired
   "loginExpired": false, // GoTo refused the refresh token; reconnect
-  "credentialsUnreadable": false, // the stored client secret can't be decrypted (key changed)
+  "credentialsUnreadable": false, // the stored client secret or GoTo login can't be decrypted (key changed); connected is then false
   "ready": true, // configured && connected && fromNumber set
   "clientId": "…", // optional
   "accountKey": "…", // optional

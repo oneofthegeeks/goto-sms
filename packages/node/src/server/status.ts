@@ -36,6 +36,7 @@ export interface StatusPayload {
   configured: boolean;
   connected: boolean;
   loginExpired: boolean;
+  /** The stored client secret or GoTo login can't be decrypted (the encryption key changed). */
   credentialsUnreadable: boolean;
   /** Configured, connected and a sending number chosen: sends can go out. */
   ready: boolean;
@@ -139,7 +140,7 @@ export async function buildStatus(
     configured,
     connected: auth.connected,
     loginExpired: auth.loginExpired,
-    credentialsUnreadable: r.credentialsUnreadable,
+    credentialsUnreadable: r.credentialsUnreadable || auth.tokensUnreadable === true,
     ready: configured && auth.connected && r.fromNumber !== undefined,
     ...(r.clientId !== undefined ? { clientId: r.clientId } : {}),
     ...(r.accountKey !== undefined ? { accountKey: r.accountKey } : {}),
