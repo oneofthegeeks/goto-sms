@@ -193,3 +193,51 @@ test('cursor follows our own sends too, so the poll window stays short', async (
   await sms.core.poller.tick();
   assert.equal(conversationQueries(fake)[0]!.get('oldestTimestamp'), '2026-10-27T10:15:00.000Z');
 });
+
+test('poller follows nextPageMarker: a STOP only on page 2 of conversations is handled', async () => {
+  const { fake, sms, got } = await setup();
+  fake.pollPageSize = 2;
+  // Three contacts, so the conversations list spans two pages; the STOP is on the last one.
+  const peers = ['+18015550201', '+18015550202', PEER];
+  peers.forEach((from, i) =>
+    fake.inbound.push({
+      id: `g-${i}`,
+      from,
+      to: FROM,
+      body: from === PEER ? 'STOP' : 'hi',
+      timestamp: `2026-10-27T10:00:0${i + 1}Z`,
+    }),
+  );
+  // And two messages from PEER, so its message list pages too.
+  fake.inbound.push(
+    { id: 'g-a', from: PEER, to: FROM, body: 'one', timestamp: '2026-10-27T10:00:04Z' },
+    { id: 'g-b', from: PEER, to: FROM, body: 'two', timestamp: '2026-10-27T10:00:05Z' },
+  );
+  assert.equal(await sms.core.poller.tick(), 5);
+  assert.deepEqual(got.map((m) => m.id).sort(), ['g-0', 'g-1', 'g-2', 'g-a', 'g-b']);
+  assert.equal(await sms.core.optOuts.has(PEER), true);
+  const markers = conversationQueries(fake).map((q) => q.get('pageMarker'));
+  assert.deepEqual(markers, [null, '2']);
+});
+
+test('poller keeps the cursor when paging loops', async () => {
+  const { fake, sms } = await setup();
+  const rec = recorder();
+  fake.inbound.push({
+    id: 'g-1',
+    from: PEER,
+    to: FROM,
+    body: 'hi',
+    timestamp: '2026-10-27T10:00:01Z',
+  });
+  // A marker that repeats: the poller stops paging and must not advance the cursor.
+  const loop = {
+    items: [{ contactPhoneNumbers: [PEER], lastMessageTimestamp: '2026-10-27T10:00:01Z' }],
+    nextPageMarker: 'same',
+  };
+  fake.failNext('GET', '/messaging/v1/conversations', 200, loop);
+  fake.failNext('GET', '/messaging/v1/conversations', 200, loop);
+  assert.equal(await newPoller(sms, () => T0, rec.logger).tick(), 1);
+  assert.equal(await sms.core.store.get(sms.core.tenant, 'poll:cursor'), undefined);
+  assert.ok(rec.lines.some((l) => l.level === 'warn' && /paging/.test(l.m)));
+});

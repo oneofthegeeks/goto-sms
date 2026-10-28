@@ -16,6 +16,8 @@ const CURSOR_KEY = 'poll:cursor';
 // Repeats are harmless: processor.persist() refuses ids it has already seen.
 const OVERLAP_MS = 5 * 60_000;
 const PAGE_SIZE = '100';
+// Guards against a marker that never ends (same cap as directory.ts listNumbers).
+const MAX_PAGES = 50;
 
 interface Conversation {
   contactPhoneNumbers?: unknown;
@@ -104,8 +106,36 @@ export class Poller {
     }
   }
 
+  /**
+   * GET every page of a list, following `nextPageMarker` as directory.ts does. `complete` is
+   * false when the page cap was hit or a marker repeated (a loop), i.e. items may be missing.
+   */
+  private async allPages<T>(
+    path: string,
+    query: Record<string, string>,
+  ): Promise<{ items: T[]; complete: boolean }> {
+    const items: T[] = [];
+    const markers = new Set<string>();
+    let marker: string | undefined;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await this.o.http.json<{ items?: T[]; nextPageMarker?: unknown }>(
+        'GET',
+        path,
+        undefined,
+        { query: { ...query, pageSize: PAGE_SIZE, ...(marker ? { pageMarker: marker } : {}) } },
+      );
+      items.push(...(res.items ?? []));
+      const next = res.nextPageMarker;
+      if (typeof next !== 'string' || next === '') return { items, complete: true };
+      if (markers.has(next)) return { items, complete: false };
+      markers.add(next);
+      marker = next;
+    }
+    return { items, complete: false };
+  }
+
   private async poll(): Promise<number> {
-    const { http, config, processor, store, tenant, now, logger } = this.o;
+    const { config, processor, store, tenant, now, logger } = this.o;
     const owner = (await config.resolve()).fromNumber;
     if (!owner) {
       logger.debug('goto-sms: polling skipped; no sending number chosen');
@@ -117,9 +147,14 @@ export class Poller {
     const cursor = Number.isNaN(savedCursor) ? now() : savedCursor;
     const oldestTimestamp = new Date(cursor - OVERLAP_MS).toISOString();
 
-    const convs = await http.json<{ items?: Conversation[] }>('GET', CONVERSATIONS, undefined, {
-      query: { ownerPhoneNumber: owner, oldestTimestamp, pageSize: PAGE_SIZE },
+    // Every page is read: the cursor advances past whatever the window held, so a text on
+    // an unread page (a STOP, after downtime or a bulk send) would otherwise be lost for good.
+    let complete = true;
+    const conversations = await this.allPages<Conversation>(CONVERSATIONS, {
+      ownerPhoneNumber: owner,
+      oldestTimestamp,
     });
+    if (!conversations.complete) complete = false;
     const batch: Array<{ at: number; m: GoToMessage }> = [];
     // The cursor follows all traffic, ours included (like geeks-tracker's use of
     // lastMessageTimestamp). Following only inbound texts would park it at the last reply,
@@ -130,7 +165,7 @@ export class Poller {
       if (!Number.isNaN(t) && t > newest) newest = t;
     };
     const oldest = cursor - OVERLAP_MS;
-    for (const c of convs.items ?? []) {
+    for (const c of conversations.items) {
       const last = ms(c.lastMessageTimestamp);
       // Nothing new in this conversation. Strictly older only: µs and ms stamps can parse equal.
       if (last < oldest) continue;
@@ -138,10 +173,13 @@ export class Poller {
       const contact = str(contacts[0]);
       if (!contact) continue;
       seenAt(last);
-      const msgs = await http.json<{ items?: GoToMessage[] }>('GET', MESSAGES, undefined, {
-        query: { ownerPhoneNumber: owner, contactPhoneNumber: contact, oldestTimestamp },
+      const msgs = await this.allPages<GoToMessage>(MESSAGES, {
+        ownerPhoneNumber: owner,
+        contactPhoneNumber: contact,
+        oldestTimestamp,
       });
-      for (const m of msgs.items ?? []) {
+      if (!msgs.complete) complete = false;
+      for (const m of msgs.items) {
         const at = ms(m.timestamp);
         seenAt(at);
         if (m.direction !== 'IN' && m.direction !== 'INBOUND') continue;
@@ -176,7 +214,13 @@ export class Poller {
         logger.warn('goto-sms: skipped an inbound text with no id, sender or body');
       }
     }
-    if (newest !== savedCursor) await store.set(tenant, CURSOR_KEY, new Date(newest).toISOString());
+    if (!complete) {
+      // Paging was cut short, so texts newer than what we saw may be unread: keep the cursor
+      // and read the window again next tick (persist() skips what's already stored).
+      logger.warn('goto-sms: GoTo paging did not finish; the poll cursor was not advanced');
+    } else if (newest !== savedCursor) {
+      await store.set(tenant, CURSOR_KEY, new Date(newest).toISOString());
+    }
 
     await processor.replayPending();
     return added;
