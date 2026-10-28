@@ -11,11 +11,12 @@ import {
   disableWebhook,
   enableWebhook,
   ensureWebhookSecret,
+  getWebhookAccount,
   getWebhookSecret,
   parseWebhookEnvelope,
 } from '../inbound/webhook.js';
 import type { Logger } from '../types.js';
-import { buildStatus, startupErrorText } from './status.js';
+import { buildStatus, INBOUND_ERROR, startupErrorText } from './status.js';
 
 export { buildStatus, REQUIRED_SCOPES, type StatusPayload } from './status.js';
 
@@ -123,31 +124,38 @@ function errorResponse(logger: Logger, route: string, err: unknown): HttpRespons
   };
 }
 
+/** Subscribes the webhook on the selected account (channel and subscription reused if they match). */
+async function subscribeWebhook(core: Core): Promise<void> {
+  const { store, tenant, http } = core;
+  if (!core.options.publicUrl?.startsWith('https://')) {
+    throw new GoToSmsError(
+      'Webhooks need an https publicUrl; use polling instead',
+      'no_public_url',
+    );
+  }
+  const { accountKey } = await core.config.resolve();
+  if (!accountKey) {
+    throw new GoToSmsError('Pick a GoTo account before turning on webhooks', 'not_configured');
+  }
+  // The URL embeds the secret, so it has to exist before GoTo is told the URL.
+  const secret = await ensureWebhookSecret(store, tenant);
+  await enableWebhook({
+    http,
+    store,
+    tenant,
+    accountKey,
+    webhookUrl: core.webhookUrl(secret)!,
+    channelPrefix: 'goto-sms',
+  });
+}
+
 /** Switches inbound delivery. The stored mode changes only once the switch succeeded. */
 async function setIncoming(core: Core, mode: IncomingMode): Promise<void> {
   const { store, tenant, http, poller } = core;
   if (mode === 'webhook') {
-    if (!core.options.publicUrl?.startsWith('https://')) {
-      throw new GoToSmsError(
-        'Webhooks need an https publicUrl; use polling instead',
-        'no_public_url',
-      );
-    }
-    const { accountKey } = await core.config.resolve();
-    if (!accountKey) {
-      throw new GoToSmsError('Pick a GoTo account before turning on webhooks', 'not_configured');
-    }
-    // The URL embeds the secret, so it has to exist before GoTo is told the URL.
-    const secret = await ensureWebhookSecret(store, tenant);
-    await enableWebhook({
-      http,
-      store,
-      tenant,
-      accountKey,
-      webhookUrl: core.webhookUrl(secret)!,
-      channelPrefix: 'goto-sms',
-    });
+    await subscribeWebhook(core);
     await store.set(tenant, 'inbound:mode', mode);
+    await store.delete(tenant, INBOUND_ERROR);
     poller.stop();
     return;
   }
@@ -161,8 +169,39 @@ async function setIncoming(core: Core, mode: IncomingMode): Promise<void> {
   // Set before start(), which polls straight away.
   if (mode === 'polling' && fromWebhook) await poller.resetCursor();
   await store.set(tenant, 'inbound:mode', mode);
+  await store.delete(tenant, INBOUND_ERROR);
   if (mode === 'polling') poller.start();
   else poller.stop();
+}
+
+/**
+ * R29: the subscription is per account, so when the selected account changes in webhook mode
+ * it moves: delete the old one (keeping the secret, so the URL and channel stay), subscribe on
+ * the new account. A failure keeps the selection and is stored as `inbound:error`, which the
+ * status shows (code and GoTo's HTTP status only) until a later switch succeeds.
+ */
+async function followAccount(core: Core): Promise<void> {
+  const { store, tenant, http, logger } = core;
+  if ((await core.incomingMode()) !== 'webhook') return;
+  const { accountKey } = await core.config.resolve();
+  if (accountKey === (await getWebhookAccount(store, tenant))) return;
+  try {
+    await disableWebhook({ http, store, tenant, rotateSecret: false });
+    await subscribeWebhook(core);
+    await store.delete(tenant, INBOUND_ERROR);
+  } catch (err) {
+    const { error, message, gotoStatus } = errorResponse(
+      logger,
+      'POST /api/selection (webhook)',
+      err,
+    ).json as { error: string; message: string; gotoStatus?: number };
+    logger.warn('goto-sms: moving the webhook to the new account failed', { error });
+    await store.set(tenant, INBOUND_ERROR, {
+      error,
+      message,
+      ...(gotoStatus !== undefined ? { gotoStatus } : {}),
+    });
+  }
 }
 
 /** POST /inbound/:secret: GoTo's webhook. Authenticated by the path secret alone. */
@@ -311,6 +350,7 @@ function liveHandlers(core: Core, setupHtml: string): Handler {
         ...(accountKey !== undefined ? { accountKey } : {}),
         ...(fromNumber !== undefined ? { fromNumber } : {}),
       });
+      await followAccount(core);
       return ok(await status());
     },
     'POST /api/test': async (req) =>

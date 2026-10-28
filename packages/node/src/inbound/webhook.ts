@@ -120,12 +120,14 @@ export async function ensureWebhookSecret(store: GoToSmsStore, tenant: string): 
 /**
  * Delete the stored subscription (a 404 means it's already gone), clear the stored ids and
  * rotate the webhook secret so the old webhook URL stops authenticating. A failed DELETE
- * throws and leaves everything as it was, so disable can be retried.
+ * throws and leaves everything as it was, so disable can be retried. `rotateSecret: false`
+ * keeps the secret, for moving the subscription to another account on the same URL.
  */
 export async function disableWebhook(o: {
   http: GoToHttp;
   store: GoToSmsStore;
   tenant: string;
+  rotateSecret?: boolean;
 }): Promise<void> {
   const subscriptionId = await o.store.get(o.tenant, KEY_SUBSCRIPTION);
   const accountKey = await o.store.get(o.tenant, KEY_ACCOUNT);
@@ -144,7 +146,16 @@ export async function disableWebhook(o: {
   await o.store.delete(o.tenant, KEY_CHANNEL);
   await o.store.delete(o.tenant, KEY_SUBSCRIPTION);
   await o.store.delete(o.tenant, KEY_ACCOUNT);
-  await o.store.set(o.tenant, KEY_SECRET, newSecret());
+  if (o.rotateSecret !== false) await o.store.set(o.tenant, KEY_SECRET, newSecret());
+}
+
+/** The account the stored subscription is on, or undefined when there is none. */
+export async function getWebhookAccount(
+  store: GoToSmsStore,
+  tenant: string,
+): Promise<string | undefined> {
+  const v = await store.get(tenant, KEY_ACCOUNT);
+  return typeof v === 'string' && v !== '' ? v : undefined;
 }
 
 /** Constant-time compare; false on length mismatch, and an empty secret never matches. */
