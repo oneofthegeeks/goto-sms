@@ -1,0 +1,70 @@
+{
+  "name": "@oneofthegeeks/goto-sms",
+  "version": "0.1.0",
+  "description": "Unofficial Node client for GoTo Connect SMS",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./testing": {
+      "import": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.js"
+      },
+      "require": {
+        "types": "./dist/testing.d.cts",
+        "default": "./dist/testing.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oneofthegeeks/goto-sms.git",
+    "directory": "packages/node"
+  },
+  "homepage": "https://github.com/oneofthegeeks/goto-sms/tree/main/packages/node#readme",
+  "bugs": {
+    "url": "https://github.com/oneofthegeeks/goto-sms/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "embed": "node scripts/embed-setup.mjs",
+    "prebuild": "npm run embed",
+    "build": "tsup",
+    "pretypecheck": "npm run embed",
+    "typecheck": "tsc -p . --noEmit",
+    "pretest": "npm run embed",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "better-sqlite3": "^12.11.1",
+    "express": "^5.3.0"
+  },
+  "peerDependencies": {
+    "better-sqlite3": "^11.0.0 || ^12.0.0 || ^13.0.0",
+    "express": "^4.18 || ^5"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    }
+  }
+}
