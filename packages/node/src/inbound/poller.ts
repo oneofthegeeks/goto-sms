@@ -15,6 +15,13 @@ const CURSOR_KEY = 'poll:cursor';
 // Each poll reaches back this far before the cursor, to absorb clock and precision skew.
 // Repeats are harmless: processor.persist() refuses ids it has already seen.
 const OVERLAP_MS = 5 * 60_000;
+// The furthest back a poll ever reads (R31). A cursor older than this (polling was off or the
+// process down for longer, or paging stayed incomplete) is clamped, and the clamp is logged at
+// error level: texts older than this are never fetched, so never auto-replied to months later.
+const MAX_LOOKBACK_MS = 24 * 3_600_000;
+// A complete tick with no traffic leaves the cursor at the last message. Once that is this
+// stale, it moves up to now (minus the overlap), so a quiet number never reaches the clamp.
+const QUIET_ADVANCE_MS = 3_600_000;
 const PAGE_SIZE = '100';
 // Guards against a marker that never ends (same cap as directory.ts listNumbers).
 const MAX_PAGES = 50;
@@ -60,6 +67,8 @@ export class Poller {
   private timer: ReturnType<typeof setInterval> | undefined;
   /** The tick in flight; ticks never overlap, and close() waits for it. */
   private current: Promise<number> | undefined;
+  /** The saved cursor last reported as clamped, so a held cursor logs once, not every tick. */
+  private clampLogged: number | undefined;
 
   constructor(o: PollerOptions) {
     this.o = o;
@@ -89,6 +98,11 @@ export class Poller {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  /** Moves the cursor to now, so the next poll reads only from here on. */
+  async resetCursor(): Promise<void> {
+    await this.o.store.set(this.o.tenant, CURSOR_KEY, new Date(this.o.now()).toISOString());
   }
 
   /** Resolves once no tick is in flight (used by close()). */
@@ -143,9 +157,22 @@ export class Poller {
     }
 
     // No cursor yet (first poll ever): start from now rather than replaying old history.
+    const tickAt = now();
     const savedCursor = ms(await store.get(tenant, CURSOR_KEY));
-    const cursor = Number.isNaN(savedCursor) ? now() : savedCursor;
-    const oldestTimestamp = new Date(cursor - OVERLAP_MS).toISOString();
+    let cursor = Number.isNaN(savedCursor) ? tickAt : savedCursor;
+    const floor = tickAt - MAX_LOOKBACK_MS;
+    if (cursor - OVERLAP_MS < floor) {
+      cursor = floor + OVERLAP_MS;
+      if (this.clampLogged !== savedCursor) {
+        this.clampLogged = savedCursor;
+        logger.error(
+          'goto-sms: the poll cursor is more than 24 h old; texts before then are not fetched',
+          { cursor: new Date(savedCursor).toISOString() },
+        );
+      }
+    }
+    const oldest = cursor - OVERLAP_MS;
+    const oldestTimestamp = new Date(oldest).toISOString();
 
     // Every page is read: the cursor advances past whatever the window held, so a text on
     // an unread page (a STOP, after downtime or a bulk send) would otherwise be lost for good.
@@ -164,7 +191,6 @@ export class Poller {
     const seenAt = (t: number) => {
       if (!Number.isNaN(t) && t > newest) newest = t;
     };
-    const oldest = cursor - OVERLAP_MS;
     for (const c of conversations.items) {
       const last = ms(c.lastMessageTimestamp);
       // Nothing new in this conversation. Strictly older only: µs and ms stamps can parse equal.
@@ -216,10 +242,15 @@ export class Poller {
     }
     if (!complete) {
       // Paging was cut short, so texts newer than what we saw may be unread: keep the cursor
-      // and read the window again next tick (persist() skips what's already stored).
+      // and read the window again next tick (persist() skips what's already stored). The
+      // 24 h clamp above stops that window growing for good.
       logger.warn('goto-sms: GoTo paging did not finish; the poll cursor was not advanced');
-    } else if (newest !== savedCursor) {
-      await store.set(tenant, CURSOR_KEY, new Date(newest).toISOString());
+    } else {
+      // Everything since `oldest` was read, so a stale cursor can safely move up to now.
+      if (newest < tickAt - QUIET_ADVANCE_MS) newest = tickAt - OVERLAP_MS;
+      if (newest !== savedCursor) {
+        await store.set(tenant, CURSOR_KEY, new Date(newest).toISOString());
+      }
     }
 
     await processor.replayPending();

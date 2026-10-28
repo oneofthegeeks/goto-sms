@@ -241,3 +241,55 @@ test('poller keeps the cursor when paging loops', async () => {
   assert.equal(await sms.core.store.get(sms.core.tenant, 'poll:cursor'), undefined);
   assert.ok(rec.lines.some((l) => l.level === 'warn' && /paging/.test(l.m)));
 });
+
+const DAY = 24 * 3_600_000;
+const iso = (t: number) => new Date(t).toISOString();
+
+test('lookback is capped at 24 h before now, logged at error level, then the cursor moves on', async () => {
+  const { fake, sms } = await setup();
+  const rec = recorder();
+  // A cursor left from weeks ago (e.g. polling turned off and back on much later).
+  await sms.core.store.set(sms.core.tenant, 'poll:cursor', iso(T0 - 21 * DAY));
+  fake.requests.length = 0;
+  await newPoller(sms, () => T0, rec.logger).tick();
+  assert.equal(conversationQueries(fake)[0]!.get('oldestTimestamp'), iso(T0 - DAY));
+  assert.ok(rec.lines.some((l) => l.level === 'error' && /24 h/.test(l.m)));
+  // A complete tick moves the stale cursor up to now (minus the overlap), so the clamp
+  // doesn't repeat every tick.
+  assert.equal(await sms.core.store.get(sms.core.tenant, 'poll:cursor'), iso(T0 - 5 * 60_000));
+});
+
+test('incomplete paging holds the cursor but the window never grows past 24 h', async () => {
+  const { fake, sms } = await setup();
+  await sms.core.store.set(sms.core.tenant, 'poll:cursor', iso(T0 - 2 * DAY));
+  const loop = { items: [], nextPageMarker: 'same' };
+  const stuck = () => {
+    fake.failNext('GET', '/messaging/v1/conversations', 200, loop);
+    fake.failNext('GET', '/messaging/v1/conversations', 200, loop);
+  };
+  stuck();
+  fake.requests.length = 0;
+  await newPoller(sms, () => T0).tick();
+  assert.equal(conversationQueries(fake)[0]!.get('oldestTimestamp'), iso(T0 - DAY));
+  assert.equal(await sms.core.store.get(sms.core.tenant, 'poll:cursor'), iso(T0 - 2 * DAY));
+  // An hour later, still incomplete: the window slides with now instead of growing.
+  stuck();
+  fake.requests.length = 0;
+  await newPoller(sms, () => T0 + 3_600_000).tick();
+  assert.equal(conversationQueries(fake)[0]!.get('oldestTimestamp'), iso(T0 + 3_600_000 - DAY));
+});
+
+test('a quiet number: the cursor moves up once it is an hour stale, so the clamp never fires', async () => {
+  const { sms } = await setup();
+  const rec = recorder();
+  await sms.core.store.set(sms.core.tenant, 'poll:cursor', iso(T0 - 30 * 60_000));
+  await newPoller(sms, () => T0, rec.logger).tick();
+  // Under an hour stale: left alone (no store write every tick).
+  assert.equal(await sms.core.store.get(sms.core.tenant, 'poll:cursor'), iso(T0 - 30 * 60_000));
+  await newPoller(sms, () => T0 + 3_600_000, rec.logger).tick();
+  assert.equal(
+    await sms.core.store.get(sms.core.tenant, 'poll:cursor'),
+    iso(T0 + 3_600_000 - 5 * 60_000),
+  );
+  assert.ok(!rec.lines.some((l) => l.level === 'error'));
+});

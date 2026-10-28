@@ -233,6 +233,9 @@ A package exposes two mountable routers:
   - `polling` / `off`: when leaving webhook mode, deletes the subscription and rotates the webhook
     secret, so the old URL returns 404 from then on (the old channel is left on GoTo; a later
     enable creates a new one for the new URL). `polling` starts the poller; `off` stops it.
+  - Switching from `webhook` to `polling` moves the poll cursor to now (the webhook covered the
+    gap); from `off` the cursor is kept. A poll never reads further back than 24 hours before now;
+    an older cursor is clamped and the clamp is logged at error level.
 - Response: the status payload.
 - Errors: `400 invalid_input` (bad mode), `400 no_public_url` (webhook without https publicUrl),
   `400 not_configured` (no account selected), `502 goto_api` with GoTo's body (for example a 403

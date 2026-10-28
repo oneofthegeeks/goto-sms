@@ -514,3 +514,25 @@ test('disconnect clears the login; unexpected errors are a generic 500', async (
   assert.equal(boom.status, 500);
   assert.equal(JSON.stringify(boom.json).includes('disk on fire'), false);
 });
+
+test('incoming: webhook → polling resets the poll cursor to now; off → polling keeps it', async () => {
+  const T = Date.parse('2026-10-27T10:00:00Z');
+  const { sms, handle } = await setup({ accountKey: 'acct-1', now: () => T });
+  const { store, tenant, poller } = sms.core;
+  const post = (mode: string) => handle(req('POST', '/api/incoming', { body: { mode } }));
+  const old = new Date(T - 3_600_000).toISOString();
+
+  // The webhook covered the gap, so polling starts from now instead of re-reading it.
+  await store.set(tenant, 'poll:cursor', old);
+  assert.equal((await post('webhook')).status, 200);
+  assert.equal((await post('polling')).status, 200);
+  await poller.idle();
+  assert.equal(await store.get(tenant, 'poll:cursor'), new Date(T).toISOString());
+
+  // Nothing handled texts while off, so the cursor is kept (a STOP sent then is still read).
+  assert.equal((await post('off')).status, 200);
+  await store.set(tenant, 'poll:cursor', old);
+  assert.equal((await post('polling')).status, 200);
+  await poller.idle();
+  assert.equal(await store.get(tenant, 'poll:cursor'), old);
+});
