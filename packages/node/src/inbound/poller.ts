@@ -121,16 +121,31 @@ export class Poller {
       query: { ownerPhoneNumber: owner, oldestTimestamp, pageSize: PAGE_SIZE },
     });
     const batch: Array<{ at: number; m: GoToMessage }> = [];
+    // The cursor follows all traffic, ours included (like geeks-tracker's use of
+    // lastMessageTimestamp). Following only inbound texts would park it at the last reply,
+    // and a busy sender would then re-list every contact texted since, every tick.
+    // It's saved only after every new message is persisted, so a failed tick loses nothing.
+    let newest = cursor;
+    const seenAt = (t: number) => {
+      if (!Number.isNaN(t) && t > newest) newest = t;
+    };
+    const oldest = cursor - OVERLAP_MS;
     for (const c of convs.items ?? []) {
+      const last = ms(c.lastMessageTimestamp);
+      // Nothing new in this conversation. Strictly older only: µs and ms stamps can parse equal.
+      if (last < oldest) continue;
       const contacts = Array.isArray(c.contactPhoneNumbers) ? c.contactPhoneNumbers : [];
       const contact = str(contacts[0]);
       if (!contact) continue;
+      seenAt(last);
       const msgs = await http.json<{ items?: GoToMessage[] }>('GET', MESSAGES, undefined, {
         query: { ownerPhoneNumber: owner, contactPhoneNumber: contact, oldestTimestamp },
       });
       for (const m of msgs.items ?? []) {
+        const at = ms(m.timestamp);
+        seenAt(at);
         if (m.direction !== 'IN' && m.direction !== 'INBOUND') continue;
-        batch.push({ at: ms(m.timestamp), m });
+        batch.push({ at, m });
       }
     }
     // Oldest first, so a START then a STOP from one number ends opted out. Unparseable
@@ -138,7 +153,6 @@ export class Poller {
     const order = (t: number) => (Number.isNaN(t) ? Infinity : t);
     batch.sort((a, b) => order(a.at) - order(b.at));
 
-    let newest = cursor;
     let added = 0;
     for (const { at, m } of batch) {
       const fromRaw = str(m.authorPhoneNumber);
@@ -156,12 +170,11 @@ export class Poller {
         if (await processor.persist(msg)) added++;
       } catch (err) {
         // A message that can't be stored (no id/sender/text) would fail every poll; skip it
-        // so the cursor still moves. Any other error (the store) aborts the tick before the
+        // rather than wedge the tick. Any other error (the store) aborts the tick before the
         // cursor is saved, so the message is fetched again next time.
         if (!(err instanceof GoToSmsError && err.code === 'invalid_inbound')) throw err;
         logger.warn('goto-sms: skipped an inbound text with no id, sender or body');
       }
-      if (!Number.isNaN(at) && at > newest) newest = at;
     }
     if (newest !== savedCursor) await store.set(tenant, CURSOR_KEY, new Date(newest).toISOString());
 

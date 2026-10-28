@@ -166,3 +166,30 @@ test('poller without a from number does nothing', async () => {
   assert.equal(await sms.core.poller.tick(), 0);
   assert.equal(fake.requests.length, 0);
 });
+
+test('cursor follows our own sends too, so the poll window stays short', async () => {
+  const { fake, sms, got } = await setup();
+  fake.inbound.push(
+    { id: 'in', from: PEER, to: FROM, body: 'hi', timestamp: '2026-10-27T10:00:01Z' },
+    {
+      id: 'out',
+      from: PEER,
+      to: FROM,
+      body: 'reply',
+      timestamp: '2026-10-27T10:20:00Z',
+      direction: 'OUT',
+    },
+  );
+  assert.equal(await sms.core.poller.tick(), 1);
+  assert.deepEqual(
+    got.map((m) => m.id),
+    ['in'],
+  );
+  assert.equal(
+    await sms.core.store.get(sms.core.tenant, 'poll:cursor'),
+    '2026-10-27T10:20:00.000Z',
+  );
+  fake.requests.length = 0;
+  await sms.core.poller.tick();
+  assert.equal(conversationQueries(fake)[0]!.get('oldestTimestamp'), '2026-10-27T10:15:00.000Z');
+});
