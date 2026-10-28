@@ -1,0 +1,32 @@
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # The npm environment holds the required-reviewer rule (manual approval).
+    environment: npm
+    permissions:
+      id-token: write # npm trusted publishing (OIDC) + provenance
+      contents: write # gh release create
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      # Root build: builds setup-ui first, then packages/node (which embeds the real page).
+      - run: npm run build
+      - run: npm test
+      - run: npm publish -w packages/node --provenance --access public
+      - name: Attach the setup page to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          (cd setup-ui/dist && zip -r "../../goto-sms-setup-ui-${TAG}.zip" .)
+          gh release create "${TAG}" "goto-sms-setup-ui-${TAG}.zip" --title "${TAG}" --generate-notes

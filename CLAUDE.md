@@ -19,7 +19,9 @@ npm run typecheck && npm run lint && npm test && npm run build
 
 ## Testing
 
-`node:test` via `tsx --test` in `packages/node/test`, one file per module, against an in-process fake GoTo (`test/helpers/fake-goto.ts`). No test touches the real GoTo.
+- Unit/contract suites: `npm test` (`node:test` via `tsx --test` in `packages/node/test`; builds setup-ui first). They run against an in-process fake GoTo (`test/helpers/fake-goto.ts`); nothing touches real GoTo.
+- Browser e2e: `npm run e2e` (= `npx playwright test`) drives `examples/express-app` against the fake GoTo.
+- C1-C23 map to test names in `contract/conformance.md`; keep it in sync when renaming tests.
 
 ## Deployment
 
@@ -27,16 +29,15 @@ Library: tag `vX.Y.Z` -> publish.yml -> npm (manual approval). No Docker/Poppy.
 
 ## Key Files
 
-- `packages/node/src/types.ts` - shared types, `VERSION`
-- `packages/node/src/errors.ts` - error classes
-- `packages/node/src/index.ts` - public exports
-- `packages/node/src/client.ts` - `createGoToSms` facade and the internal `Core`
-- `packages/node/src/server/handlers.ts` - framework-free setup/API/callback/webhook handlers; `status.ts` builds the status payload
-- `contract/http.md` - language-neutral HTTP contract (keep in sync with handlers.ts)
+- `packages/node/src/client.ts` - `createGoToSms` facade and options
+- `packages/node/src/server/express.ts` - Express router; `handlers.ts` - framework-free `(req, res)` handlers for `contract/http.md`
+- `packages/node/src/types.ts` - shared types, `VERSION`; `errors.ts` - error classes; `index.ts` - public exports
+- `packages/node/scripts/embed-setup.mjs` - embeds `setup-ui/dist` into the generated (gitignored) `setup-html.generated.ts`
 - `packages/node/tsup.config.ts` - build; injects `__VERSION__`
-- `packages/node/src/server/handlers.ts` - framework-free routes (`contract/http.md` documents them)
-- `packages/node/src/server/express.ts` - Express adapter behind `sms.router()` / `webhookRouter()`
-- `setup-ui/src/` - setup page (`index.html`, `app.ts`, `styles.css`); `build.mjs` inlines them
+- `setup-ui/` - the shared static setup page
+- `contract/` - `http.md` (endpoint spec), `conformance.md` (C1-C23 to tests)
+- `e2e/` - Playwright test; `examples/express-app/` - runnable demo
+- `.github/workflows/` - `ci.yml`, `publish.yml` (tag `v*`, `npm` environment)
 
 ## Gotchas
 
@@ -47,3 +48,6 @@ Library: tag `vX.Y.Z` -> publish.yml -> npm (manual approval). No Docker/Poppy.
   typecheck/test/build): the real page if `setup-ui/dist` exists, else a stub. Run `npm run build`
   after changing setup-ui.
 - The setup page must use relative URLs only (`api/status`); a test enforces it.
+- Publish and `npm run build` must run from the repo root: it builds setup-ui before packages/node, otherwise the package embeds a stub page.
+- `prelint`/`typecheck` run the embed step, so a fresh clone lints without a prior build.
+- Package `LICENSE` is a copy of the root one (npm ships it from `packages/node`).
