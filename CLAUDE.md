@@ -1,6 +1,6 @@
 # goto-sms
 
-Live: not yet published
+Live: v0.1.0 (2026-10-28) — first npm publish of `@oneofthegeeks/goto-sms` (manual; later versions publish from `v*` tags via trusted publishing)
 
 ## What This Is
 
