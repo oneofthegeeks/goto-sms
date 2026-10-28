@@ -145,6 +145,13 @@ export interface GoToSms {
    */
   status(): Promise<StatusPayload>;
   /**
+   * Checks the GoTo login now by getting a new access token (exchanging a GOTO_REFRESH_TOKEN
+   * seed, or refreshing), then returns `status().connected`. Never throws for login or
+   * configuration problems: it returns false and `status()` says why. For migrating a seed at
+   * startup or a deeper health check; each call makes one GoTo token request.
+   */
+  verifyConnection(): Promise<boolean>;
+  /**
    * The setup page, its JSON API, the OAuth callback and the webhook, for
    * `app.use(mountPath, sms.router())`. Throws without `authorize` (see contract/http.md).
    * Usable before `ready`; if startup fails the page still loads and shows why.
@@ -155,7 +162,7 @@ export interface GoToSms {
   /** Resolves after key resolution, the process lock, replayPending and poller start. */
   ready: Promise<void>;
   close(): Promise<void>;
-  /** @internal for handlers; throws until `ready` resolves. */
+  /** Internal, for the package's own handlers; may change in any release. Throws until `ready`. */
   readonly core: Core;
 }
 
@@ -496,6 +503,23 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
         return buildStatus(options, undefined, startupErrorText(err));
       }
       return buildStatus(options, c);
+    },
+    async verifyConnection() {
+      let c: Core;
+      try {
+        c = await coreReady;
+      } catch (err) {
+        if (err instanceof NotConfiguredError) return false;
+        throw err;
+      }
+      try {
+        await c.auth.verify();
+      } catch (err) {
+        // Login, configuration and GoTo errors all land in status(); anything else is a bug.
+        if (!(err instanceof GoToSmsError)) throw err;
+        c.logger.debug('goto-sms: verifyConnection failed', { error: err.code });
+      }
+      return (await buildStatus(options, c)).connected;
     },
     router() {
       assertSetupAuth(options);
