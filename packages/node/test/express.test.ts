@@ -192,7 +192,7 @@ test('the page and status still answer when startup failed', async () => {
   assert.equal(status.configured, false);
   assert.equal(
     status.startupError,
-    'Set GOTO_SMS_ENCRYPTION_KEY (required when no dataDir is used)',
+    'Set GOTO_SMS_ENCRYPTION_KEY (or give a dataDir/store the package can keep a key file in)',
   );
   const save = await fetch(`${base}/goto-sms/api/credentials`, jsonPost(base, '{}'));
   assert.equal(save.status, 400);

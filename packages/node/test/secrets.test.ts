@@ -114,8 +114,25 @@ test('keyfile of the wrong length is an error, not regenerated', async () => {
   assert.equal((await readFile(file)).length, 5);
 });
 
-test('no key and no dataDir throws NotConfiguredError', async () => {
-  await assert.rejects(resolveEncryptionKey({ env: {}, logger }), NotConfiguredError);
+test('no key and no dataDir throws NotConfiguredError in plain words', async () => {
+  await assert.rejects(resolveEncryptionKey({ env: {}, logger }), {
+    name: 'NotConfiguredError',
+    message:
+      'Set GOTO_SMS_ENCRYPTION_KEY (or give a dataDir/store the package can keep a key file in)',
+  });
+});
+
+test('a damaged keyfile: the error names no path (it reaches the page); the log does', async () => {
+  const dataDir = await tmp();
+  const file = join(dataDir, '.goto-sms.key');
+  await writeFile(file, Buffer.alloc(5));
+  warnings.length = 0;
+  const err = await resolveEncryptionKey({ env: {}, dataDir, logger }).catch((e: unknown) => e);
+  assert.ok(err instanceof GoToSmsError);
+  assert.equal(err.code, 'bad_keyfile');
+  assert.ok(!err.message.includes(dataDir), err.message);
+  assert.match(err.message, /encryption key file is damaged/i);
+  assert.ok(warnings.some((w) => w.includes(file)));
 });
 
 test('a CHANGEME or blank key is not used as the key', async () => {

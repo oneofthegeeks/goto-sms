@@ -253,3 +253,25 @@ test('a CHANGEME or blank publicUrl counts as unset; the env value then applies'
   cleanups.push(() => b.close());
   assert.equal((await b.status()).redirectUri, '');
 });
+
+test('authorize can read framework fields such as req.cookies without a cast', () => {
+  // A compile-time check (tsc covers test/): Express apps read req.cookies directly.
+  const sms = createGoToSms({
+    store: new MemoryStore(),
+    encryptionKey: 'k',
+    env: {},
+    logger: silent,
+    authorize: (req) => Boolean(req.cookies?.session) && req.headers.host !== undefined,
+  });
+  cleanups.push(() => sms.close());
+  // The old IncomingMessage-only signature still type-checks.
+  const old: (req: import('node:http').IncomingMessage) => boolean = () => true;
+  const sms2 = createGoToSms({
+    store: new MemoryStore(),
+    encryptionKey: 'k',
+    env: {},
+    logger: silent,
+    authorize: old,
+  });
+  cleanups.push(() => sms2.close());
+});

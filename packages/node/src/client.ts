@@ -34,6 +34,14 @@ const ONE_PROCESS =
 
 export type IncomingMode = 'webhook' | 'polling' | 'off';
 
+/**
+ * What `authorize` receives: the host framework's request (Express passes its own, with
+ * `req.cookies`, `req.user` and so on), typed loosely so hosts can read those without a cast.
+ */
+// oxlint-disable-next-line typescript/no-explicit-any -- framework fields are the host's business
+export type AuthorizeRequest = IncomingMessage & Record<string, any>;
+export type Authorize = (req: AuthorizeRequest) => boolean | Promise<boolean>;
+
 export interface GoToSmsOptions {
   publicUrl?: string;
   /** Where the host mounts router(); default '/goto-sms'. */
@@ -41,7 +49,7 @@ export interface GoToSmsOptions {
   dataDir?: string;
   store?: GoToSmsStore;
   tenant?: string;
-  authorize?: (req: IncomingMessage) => boolean | Promise<boolean>;
+  authorize?: Authorize;
   allowUnauthenticatedSetup?: boolean;
   clientId?: string;
   clientSecret?: string;
@@ -73,7 +81,7 @@ export interface ResolvedOptions {
   /** publicUrl + mountPath + '/callback', or undefined without a publicUrl. */
   redirectUri?: string;
   dataDir?: string;
-  authorize?: (req: IncomingMessage) => boolean | Promise<boolean>;
+  authorize?: Authorize;
   allowUnauthenticatedSetup: boolean;
   logOnly: boolean;
   replies: KeywordReplies;
