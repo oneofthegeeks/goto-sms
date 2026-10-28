@@ -80,8 +80,8 @@ test('facade end-to-end on fake', async () => {
   assert.equal((await sms.send(PEER, 'nope')).status, 'opted_out');
 
   const s = await sms.status();
-  assert.equal(s.auth.connected, true);
-  assert.equal(s.config.sources.clientSecret, 'store');
+  assert.equal(s.connected, true);
+  assert.equal(s.sources.clientSecret, 'store');
   assert.equal(JSON.stringify(s).includes('csecret'), false, 'status never carries the secret');
 });
 

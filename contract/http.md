@@ -1,0 +1,247 @@
+# goto-sms HTTP contract
+
+The language-neutral spec for the routes a goto-sms package mounts: the setup page, its JSON API,
+the OAuth callback, and the GoTo webhook. Every port (Node first, then Python and others)
+implements exactly this. The Node reference is `packages/node/src/server/handlers.ts`.
+
+## Conventions
+
+- All paths are relative to the mount point the host chooses (Node default `/goto-sms`). The setup
+  page uses relative URLs only, so it works under any mount, including nested paths behind a proxy.
+- The OAuth redirect URI is `publicUrl + mountPath + "/callback"`. For example,
+  `https://x.example` mounted at `/admin/tools/sms` gives
+  `https://x.example/admin/tools/sms/callback`.
+- The webhook URL is `publicUrl + mountPath + "/inbound/" + secret`.
+- Request bodies are JSON objects; a missing body counts as `{}`.
+- JSON responses use `200` unless stated. Header names are matched case-insensitively.
+
+## Authentication
+
+| Route                   | `authorize(req)` | Same-origin check | Authenticated by       |
+| ----------------------- | ---------------- | ----------------- | ---------------------- |
+| `POST /inbound/:secret` | exempt           | exempt            | path secret            |
+| `GET /callback`         | exempt           | exempt            | single-use OAuth state |
+| every other `GET`       | required         | no                | host's `authorize`     |
+| every other non-`GET`   | required         | required          | host's `authorize`     |
+
+- `authorize(req)` is a required option. It receives the host framework's raw request and returns
+  (or resolves to) a boolean. `false` gives `403 {"error":"forbidden"}`.
+- Creating the handlers/router **throws** when no `authorize` is given, with this exact message:
+  `goto-sms: pass authorize(req) to createGoToSms (or allowUnauthenticatedSetup: true in development)`.
+  `allowUnauthenticatedSetup: true` skips `authorize`, but it also throws when
+  `NODE_ENV === "production"`.
+- **Same-origin check** (CSRF): passes when `Sec-Fetch-Site` is exactly `same-origin`, or when the
+  host of the `Origin` header equals the `Host` header, or equals the host of `publicUrl` (for
+  proxies that rewrite `Host`). A missing, unparseable or `null` Origin fails. A failure gives
+  `403 {"error":"cross_origin"}`. Order: `authorize` first, then the same-origin check.
+- The webhook and the callback are exempt from both, because GoTo and the OAuth redirect carry
+  neither the host's session nor a same-origin header.
+
+## Errors
+
+Every JSON error is `{ "error": "<code>", "message": "<human text>" }`.
+
+| Status | `error`                                                                                                               | When                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| 400    | `invalid_input`, `invalid_number`, `invalid_inbound`, `not_configured`, `login_expired`, `bad_state`, `no_public_url` | the request can't be done as asked                     |
+| 403    | `forbidden`, `cross_origin`                                                                                           | see Authentication                                     |
+| 404    | `not_found`                                                                                                           | unknown route                                          |
+| 409    | `locked`                                                                                                              | a field set by options/env was given a non-empty value |
+| 502    | `goto_api`                                                                                                            | GoTo answered with an error (body below)               |
+| 503    | `temporary`                                                                                                           | GoTo timed out or the network failed                   |
+| 500    | `internal`                                                                                                            | anything else; the message is generic                  |
+
+A `goto_api` error carries GoTo's answer verbatim (truncated to 500 characters), so the page can
+show, for example, a missing-scope 403:
+
+```json
+{
+  "error": "goto_api",
+  "message": "GoTo API error 403",
+  "gotoStatus": 403,
+  "gotoBody": "{\"message\":\"missing scope\"}"
+}
+```
+
+Error details are logged at debug level only. Logs never hold tokens, secrets or message bodies at
+info level or above.
+
+## Secrets in responses
+
+No response ever contains the client secret, an access token, or the refresh token. The webhook
+secret appears in exactly one place: `incoming.webhookUrl` in the status payload, which only the
+authorized admin can fetch and which the page shows so the admin can see where GoTo delivers.
+
+## Status payload
+
+Returned by `GET /api/status` and by every state-changing route marked "returns status".
+
+```jsonc
+{
+  "version": "0.1.0", // package version
+  "configured": true, // a readable client ID and client secret are available
+  "connected": true, // a GoTo login is stored and not expired
+  "loginExpired": false, // GoTo refused the refresh token; reconnect
+  "credentialsUnreadable": false, // the stored client secret can't be decrypted (key changed)
+  "ready": true, // configured && connected && fromNumber set
+  "clientId": "…", // optional
+  "accountKey": "…", // optional
+  "fromNumber": "+18015550100", // optional, E.164
+  "invalidFromNumber": true, // optional: an options/env fromNumber isn't a phone number
+  "sources": {
+    // where each field comes from: "options" | "env" | "store" | "unset"
+    "clientId": "store",
+    "clientSecret": "store",
+    "accountKey": "store",
+    "fromNumber": "store",
+  },
+  "refreshSource": "login", // optional: "login" | "seeded-from-env"
+  "redirectUri": "https://x.example/goto-sms/callback", // "" without a publicUrl
+  "incoming": {
+    "mode": "webhook", // "webhook" | "polling" | "off"
+    "webhookUrl": "https://x.example/goto-sms/inbound/<secret>", // only in webhook mode
+    "canWebhook": true, // publicUrl is https
+  },
+  "requiredScopes": [
+    "messaging.v1.send",
+    "messaging.v1.read",
+    "messaging.v1.notifications.manage",
+    "voice-admin.v1.read",
+  ],
+}
+```
+
+If the package could not start for lack of configuration (for example no encryption key), the
+status still answers, with `configured`, `connected` and `ready` false and every source `"unset"`.
+
+## Routes
+
+### `GET /`
+
+- Auth: `authorize`.
+- Response: `200`, the setup page HTML.
+
+### `GET /api/status`
+
+- Auth: `authorize`.
+- Response: the status payload.
+
+### `POST /api/credentials`
+
+- Auth: `authorize` + same-origin.
+- Request: `{ "clientId"?: string, "clientSecret"?: string }`.
+  - An empty `clientSecret` keeps the stored one (the page never echoes it back).
+  - An empty value for a field set by options/env is skipped. The page posts only the fields it
+    lets the admin edit, so a locked field arrives absent or empty and never conflicts.
+  - A non-empty value for a field set by options/env gives `409 locked`; nothing is written.
+- Response: the status payload.
+- Errors: `400 invalid_input` (a field isn't a string), `409 locked`.
+
+### `POST /api/connect`
+
+- Auth: `authorize` + same-origin.
+- Request: none.
+- Response: `{ "url": "<GoTo authorize URL>" }`. The page navigates to it. The URL carries no
+  `scope` and no `prompt`; its `state` is single-use and expires after 10 minutes.
+- Errors: `400 no_public_url` (no publicUrl, so no redirect URI), `400 not_configured` (no client
+  ID/secret, or the secret can't be decrypted).
+
+### `GET /callback`
+
+- Auth: exempt; authenticated by `state`.
+- Query: `code`, `state`, or GoTo's `error`.
+- Response: always `302` to the page:
+  - success → `./?connected=1`;
+  - GoTo sent `error` → `./?error=goto_login` (GoTo's text is never echoed; the page explains the
+    two usual causes: the redirect URI isn't registered on the client, or a scope isn't enabled);
+  - missing `code`/`state`, or an unknown, reused or expired state → `./?error=bad_state`;
+  - any other failure → `./?error=<code>` (for example `login_expired` when GoTo refuses the code).
+
+### `POST /api/disconnect`
+
+- Auth: `authorize` + same-origin.
+- Request: none. Deletes the stored login.
+- Response: the status payload.
+
+### `GET /api/accounts`
+
+- Auth: `authorize`.
+- Response: `{ "accounts": [{ "key": "<accountKey>", "name": "<display name>" }] }`.
+- Errors: `400 not_configured` / `400 login_expired`, `502 goto_api`, `503 temporary`.
+
+### `GET /api/numbers?accountKey=`
+
+- Auth: `authorize`.
+- Query: `accountKey` (required).
+- Response:
+  `{ "numbers": [{ "number": "+1…", "name": "…", "accountKey": "…", "smsEnabled"?: boolean }] }`,
+  de-duplicated, in GoTo's order.
+- Errors: `400 invalid_input` (no accountKey), plus those of `/api/accounts`.
+
+### `POST /api/selection`
+
+- Auth: `authorize` + same-origin.
+- Request: `{ "accountKey"?: string, "fromNumber"?: string }`. `fromNumber` may be loosely
+  formatted and is saved as E.164; an empty value clears a stored field.
+- Response: the status payload.
+- Errors: `400 invalid_number`, `400 invalid_input`, `409 locked`.
+
+### `POST /api/test`
+
+- Auth: `authorize` + same-origin.
+- Request: `{ "to": string }` (required, loosely formatted is fine).
+- Response: the send result, always `200`:
+  `{ "status": "sent" | "opted_out" | "invalid_number" | "uncertain" | "not_connected" | "rejected", "reason"?, "retryable"?, "messageId"?, "to"? }`.
+  The text is fixed: `Test message from goto-sms`. Opt-outs are honoured.
+- Errors: `400 invalid_input` (no `to`).
+
+### `POST /api/incoming`
+
+- Auth: `authorize` + same-origin.
+- Request: `{ "mode": "webhook" | "polling" | "off" }`.
+- Behaviour; the stored mode changes only after the switch succeeded:
+  - `webhook`: needs an https publicUrl and a selected account. Makes sure the webhook secret
+    exists, then reuses a GoTo notification channel whose URL equals the current webhook URL or
+    creates one, subscribes it to `INBOUND_MESSAGE` on the account, stops polling.
+  - `polling` / `off`: when leaving webhook mode, deletes the subscription and rotates the webhook
+    secret, so the old URL returns 404 from then on (the old channel is left on GoTo; a later
+    enable creates a new one for the new URL). `polling` starts the poller; `off` stops it.
+- Response: the status payload.
+- Errors: `400 invalid_input` (bad mode), `400 no_public_url` (webhook without https publicUrl),
+  `400 not_configured` (no account selected), `502 goto_api` with GoTo's body (for example a 403
+  when the client lacks `messaging.v1.notifications.manage`).
+
+### `GET /api/log?limit=`
+
+- Auth: `authorize`.
+- Query: `limit`, default 50, capped at 500; anything unparseable or below 1 means 50.
+- Response: `{ "entries": [{ "id", "direction": "outbound" | "inbound", "from", "to", "status", "reason"?, "gotoId"?, "at" }] }`,
+  newest first. Message bodies are never stored, so never returned.
+
+### `GET /api/opt-outs`
+
+- Auth: `authorize`.
+- Response: `{ "optOuts": [{ "number": "+1…", "at": "<ISO time>", "source": "keyword" | "admin" }] }`,
+  newest first.
+
+### `POST /api/opt-outs`
+
+- Auth: `authorize` + same-origin.
+- Request: `{ "number": string, "action": "add" | "remove" }`. An added number gets source
+  `admin`.
+- Response: the opt-out list, as `GET /api/opt-outs`.
+- Errors: `400 invalid_input` (bad action or no number), `400 invalid_number`.
+
+### `POST /inbound/:secret`
+
+- Auth: exempt; authenticated by the path secret, compared in constant time.
+- Request: GoTo's webhook envelope (parsed loosely).
+- Response, no body in every case:
+  - `404` when incoming mode isn't `webhook`, or the secret is wrong;
+  - `204` for anything that isn't an inbound text (GoTo sends other event types), and for a
+    duplicate of an already-received message;
+  - otherwise the message is **persisted as pending first**, then `204` is returned, then it is
+    processed (keywords, opt-outs, the host's `message` event) after the response. A processing
+    failure leaves it pending for the background retry;
+  - `400 {"error":"invalid_inbound"}` if the message can't be stored for lack of an id, sender or
+    body.

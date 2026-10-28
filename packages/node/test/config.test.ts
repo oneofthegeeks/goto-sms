@@ -136,6 +136,13 @@ test('a patch with one locked field writes nothing', async () => {
   assert.equal(await store.get(T, 'config:accountKey'), undefined);
 });
 
+test('a blank value for a locked field is skipped, not a conflict', async () => {
+  const { cfg, store } = make({ env: { GOTO_CLIENT_ID: 'x' } });
+  await cfg.save({ clientId: '', accountKey: 'ak' });
+  assert.equal(await store.get(T, 'config:accountKey'), 'ak');
+  assert.equal((await cfg.resolve()).clientId, 'x');
+});
+
 test('a patch with an invalid fromNumber throws invalid_number and writes nothing', async () => {
   const { cfg, store } = make();
   await assert.rejects(cfg.save({ clientId: 'cid', fromNumber: 'abc' }), {

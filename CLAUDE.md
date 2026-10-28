@@ -19,7 +19,7 @@ npm run typecheck && npm run lint && npm test && npm run build
 
 ## Testing
 
-`node:test` via `tsx --test` in `packages/node/test`. Currently only a smoke test (exports + error base class).
+`node:test` via `tsx --test` in `packages/node/test`, one file per module, against an in-process fake GoTo (`test/helpers/fake-goto.ts`). No test touches the real GoTo.
 
 ## Deployment
 
@@ -30,6 +30,9 @@ Library: tag `vX.Y.Z` -> publish.yml -> npm (manual approval). No Docker/Poppy.
 - `packages/node/src/types.ts` - shared types, `VERSION`
 - `packages/node/src/errors.ts` - error classes
 - `packages/node/src/index.ts` - public exports
+- `packages/node/src/client.ts` - `createGoToSms` facade and the internal `Core`
+- `packages/node/src/server/handlers.ts` - framework-free setup/API/callback/webhook handlers; `status.ts` builds the status payload
+- `contract/http.md` - language-neutral HTTP contract (keep in sync with handlers.ts)
 - `packages/node/tsup.config.ts` - build; injects `__VERSION__`
 
 ## Gotchas

@@ -111,7 +111,8 @@ export class ConfigResolver {
 
   /**
    * Persist `patch` to the store. The whole patch is validated before anything is written.
-   * An empty clientSecret means "keep the stored one" (the UI never echoes it back).
+   * An empty clientSecret means "keep the stored one" (the UI never echoes it back), and an
+   * empty value for a field set by options/env is skipped; any other value for one is `locked`.
    */
   async save(patch: Partial<Record<ConfigField, string>>): Promise<void> {
     const writes: Array<[ConfigField, string]> = [];
@@ -121,6 +122,9 @@ export class ConfigResolver {
       if (field === 'clientSecret' && raw === '') continue;
 
       const fixed = this.fixedValue(field);
+      // A blank for a config-set field is "not editable here", not an attempt to change it:
+      // the setup page leaves locked inputs empty.
+      if (fixed && raw === '') continue;
       if (fixed) {
         throw new GoToSmsError(
           `${field} is set by config (${fixed.source === 'options' ? 'options' : 'env'}) and can't be changed here`,
