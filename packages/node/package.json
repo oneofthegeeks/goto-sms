@@ -1,6 +1,6 @@
 {
   "name": "@oneofthegeeks/goto-sms",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Unofficial Node client for GoTo Connect SMS",
   "type": "module",
   "main": "dist/index.cjs",
