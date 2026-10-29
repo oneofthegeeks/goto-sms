@@ -1,18 +1,30 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
     <meta name="referrer" content="no-referrer" />
     <!-- No favicon request: it would go to the host's root, outside the mount. -->
     <link rel="icon" href="data:," />
     <title>GoTo SMS setup</title>
+    <!-- Theme before the CSS paints, so there is no flash: dark unless the user chose light. -->
+    <script>
+      (function () {
+        var theme = 'dark';
+        try {
+          if (localStorage.getItem('goto-sms-theme') === 'light') theme = 'light';
+        } catch (e) {}
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <!-- STYLE -->
   </head>
   <body>
     <header class="top">
-      <a id="back" class="back" hidden></a>
+      <div class="topbar">
+        <a id="back" class="back" hidden></a>
+        <button id="theme-toggle" type="button" class="ghost theme-toggle"></button>
+      </div>
       <h1>GoTo SMS setup</h1>
       <p class="lede">Connect this app to GoTo Connect so it can send and receive texts.</p>
     </header>
