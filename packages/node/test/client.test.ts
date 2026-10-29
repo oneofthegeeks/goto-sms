@@ -240,3 +240,96 @@ test('default logger drops debug lines', async () => {
   assert.ok(!consoleCalls.some((c) => c.level === 'debug'));
   assert.ok(consoleCalls.some((c) => c.level === 'warn'));
 });
+
+test('a CHANGEME or blank publicUrl counts as unset; the env value then applies', async () => {
+  const fake = await fakeGoTo();
+  const a = await connectedSms(fake, {
+    publicUrl: 'CHANGEME',
+    env: { GOTO_SMS_PUBLIC_URL: 'https://env.example' },
+  });
+  cleanups.push(() => a.close());
+  assert.equal((await a.status()).redirectUri, 'https://env.example/goto-sms/callback');
+  const b = await connectedSms(fake, { publicUrl: ' ', env: { GOTO_SMS_PUBLIC_URL: 'changeme' } });
+  cleanups.push(() => b.close());
+  assert.equal((await b.status()).redirectUri, '');
+});
+
+test('authorize can read framework fields such as req.cookies without a cast', () => {
+  // A compile-time check (tsc covers test/): Express apps read req.cookies directly.
+  const sms = createGoToSms({
+    store: new MemoryStore(),
+    encryptionKey: 'k',
+    env: {},
+    logger: silent,
+    authorize: (req) => Boolean(req.cookies?.session) && req.headers.host !== undefined,
+  });
+  cleanups.push(() => sms.close());
+  // The old IncomingMessage-only signature still type-checks.
+  const old: (req: import('node:http').IncomingMessage) => boolean = () => true;
+  const sms2 = createGoToSms({
+    store: new MemoryStore(),
+    encryptionKey: 'k',
+    env: {},
+    logger: silent,
+    authorize: old,
+  });
+  cleanups.push(() => sms2.close());
+});
+
+const tokenCalls = (fake: { requests: Array<{ path: string; body: string }> }) =>
+  fake.requests.filter((r) => r.path === '/oauth/token').map((r) => new URLSearchParams(r.body));
+
+test('verifyConnection refreshes now even when the access token is fresh', async () => {
+  const fake = await fakeGoTo();
+  const sms = await connectedSms(fake);
+  cleanups.push(() => sms.close());
+  const before = tokenCalls(fake).length;
+  assert.equal(await sms.verifyConnection(), true);
+  const after = tokenCalls(fake);
+  assert.equal(after.length, before + 1);
+  assert.equal(after.at(-1)!.get('grant_type'), 'refresh_token');
+});
+
+test('verifyConnection exchanges a seeded refresh token, then reports connected', async () => {
+  const fake = await fakeGoTo();
+  const sms = await connectedSms(fake, { connect: false, refreshToken: 'refresh-1' });
+  cleanups.push(() => sms.close());
+  await sms.core.config.save({ clientId: 'cid', clientSecret: 'csecret' });
+  assert.equal((await sms.status()).connected, false);
+  assert.equal(await sms.verifyConnection(), true);
+  const s = await sms.status();
+  assert.equal(s.connected, true);
+  assert.equal(s.refreshSource, 'seeded-from-env');
+  assert.equal(tokenCalls(fake).at(-1)!.get('refresh_token'), 'refresh-1');
+});
+
+test('verifyConnection returns false (never throws) for login problems', async () => {
+  const fake = await fakeGoTo();
+  // Not configured at all.
+  const bare = await connectedSms(fake, { connect: false });
+  cleanups.push(() => bare.close());
+  assert.equal(await bare.verifyConnection(), false);
+  // A refused seed.
+  const seeded = await connectedSms(fake, { connect: false, refreshToken: 'wrong' });
+  cleanups.push(() => seeded.close());
+  await seeded.core.config.save({ clientId: 'cid', clientSecret: 'csecret' });
+  assert.equal(await seeded.verifyConnection(), false);
+  // GoTo refuses the stored login: false, and status says the login expired.
+  const sms = await connectedSms(fake);
+  cleanups.push(() => sms.close());
+  fake.tokens.refresh = 'rotated-elsewhere';
+  assert.equal(await sms.verifyConnection(), false);
+  assert.equal((await sms.status()).loginExpired, true);
+  // Startup failed for lack of a key.
+  const nokey = createGoToSms({ store: new MemoryStore(), env: {}, logger: silent });
+  cleanups.push(() => nokey.close());
+  assert.equal(await nokey.verifyConnection(), false);
+});
+
+test('verifyConnection returns false when GoTo cannot be reached (not "connected" in an outage)', async () => {
+  const fake = await fakeGoTo();
+  const sms = await connectedSms(fake);
+  cleanups.push(() => sms.close());
+  await fake.close(); // the token request now fails at the network level
+  assert.equal(await sms.verifyConnection(), false);
+});

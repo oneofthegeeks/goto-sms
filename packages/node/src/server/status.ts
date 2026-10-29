@@ -63,6 +63,8 @@ export interface StatusPayload {
     error?: IncomingError;
   };
   requiredScopes: string[];
+  /** The host's backUrl/backLabel, for the page's "← Back to <label>" link. */
+  back?: { url: string; label: string };
   /** Why startup failed (e.g. no encryption key), when it did. Secret-free. */
   startupError?: string;
 }
@@ -110,6 +112,7 @@ export async function buildStatus(
     version: VERSION,
     redirectUri: options.redirectUri ?? '',
     requiredScopes: [...REQUIRED_SCOPES],
+    ...(options.back ? { back: { ...options.back } } : {}),
   };
   const canWebhook = options.publicUrl?.startsWith('https://') ?? false;
   if (!core) {

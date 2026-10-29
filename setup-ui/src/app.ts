@@ -1,10 +1,14 @@
 // The goto-sms setup page. Plain DOM, no framework. Every URL is relative ('api/status'), so
 // the page works under any mount path, including nested paths behind a proxy. Text that came
 // from GoTo, texters or the server is always set with textContent, never as HTML.
+//
+// Two views: a five-step setup (one step open at a time, the first unfinished one unless the
+// admin chose another with Change) and, once steps 1-4 are done, a calm manage view.
 
 type Source = 'options' | 'env' | 'store' | 'unset';
 type Field = 'clientId' | 'clientSecret' | 'accountKey' | 'fromNumber';
 type Mode = 'webhook' | 'polling' | 'off';
+type StepNo = 1 | 2 | 3 | 4 | 5;
 
 /** The subset of the server's StatusPayload (contract/http.md) the page reads. */
 interface Status {
@@ -19,6 +23,7 @@ interface Status {
   fromNumber?: string;
   invalidFromNumber?: true;
   sources: Record<Field, Source>;
+  refreshSource?: 'login' | 'seeded-from-env';
   redirectUri: string;
   incoming: {
     mode: Mode;
@@ -27,6 +32,7 @@ interface Status {
     error?: { error: string; message: string; gotoStatus?: number };
   };
   requiredScopes: string[];
+  back?: { url: string; label: string };
   startupError?: string;
 }
 interface Account {
@@ -59,11 +65,20 @@ interface SendResult {
   to?: string;
 }
 
-const UNREADABLE =
-  "Saved GoTo credentials can't be decrypted — re-enter the client secret and reconnect";
-const GOTO_LOGIN =
-  'GoTo shows the same error for an unregistered redirect URI or a scope not enabled on the client — check both.';
-const SECRET_SAVED = 'saved — leave blank to keep';
+const STEPS: Record<StepNo, string> = {
+  1: 'GoTo app credentials',
+  2: 'Sign in to GoTo',
+  3: 'Sending number',
+  4: 'Test text',
+  5: 'Incoming texts',
+};
+const MODE_LABEL: Record<Mode, string> = {
+  off: 'Off',
+  polling: 'Polling every 30 s',
+  webhook: 'Webhook',
+};
+const CONFIG = "✓ set by your app's config";
+const SECRET_SAVED = 'Saved. Leave blank to keep it.';
 
 /** An API error carrying the contract's { error, message, gotoStatus?, gotoBody? }. */
 class ApiError extends Error {
@@ -105,6 +120,9 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
   if (!el) throw new Error('missing #' + id);
   return el as T;
 }
+const btn = (id: string) => $<HTMLButtonElement>(id);
+const input = (id: string) => $<HTMLInputElement>(id);
+const select = (id: string) => $<HTMLSelectElement>(id);
 
 const live = $('live');
 /** Announces a change to screen readers (the aria-live region). */
@@ -114,7 +132,7 @@ function announce(text: string): void {
   setTimeout(() => (live.textContent = text), 50);
 }
 
-/** Shows a result line under a section; GoTo's error body is shown verbatim. */
+/** Shows a result line; GoTo's error body is shown verbatim under it. */
 function show(id: string, kind: 'ok' | 'bad', text: string, gotoBody?: string): void {
   const el = $(id);
   el.hidden = false;
@@ -135,7 +153,7 @@ function showError(id: string, err: unknown): void {
     const text = err.gotoStatus ? err.message + '. GoTo said:' : err.message;
     show(id, 'bad', text, err.gotoBody);
   } else {
-    show(id, 'bad', 'Could not reach the server; check your connection and try again.');
+    show(id, 'bad', "Couldn't reach the server. Check your connection and try again.");
   }
 }
 
@@ -149,105 +167,301 @@ async function busy(button: HTMLButtonElement, fn: () => Promise<void>): Promise
   }
 }
 
+/** Sets a button's role in its step: the one filled (primary) button, or a quiet one. */
+function setPrimary(button: HTMLElement, primary: boolean): void {
+  button.classList.toggle('primary', primary);
+  button.classList.toggle('ghost', !primary);
+}
+
 const locked = (s: Status, f: Field): boolean =>
   s.sources[f] === 'options' || s.sources[f] === 'env';
 
-let status: Status | undefined;
-let numbers: NumberEntry[] = [];
+/** '+13854400099' → '385-440-0099'; anything else unchanged. */
+function phone(n: string): string {
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(n);
+  return m ? m[1] + '-' + m[2] + '-' + m[3] : n;
+}
+const time = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+};
+const when = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+};
 
-function renderBanner(s: Status): void {
-  const banner = $('status');
-  const title = $('banner-title');
-  const detail = $('banner-detail');
-  const reconnect = $<HTMLButtonElement>('reconnect');
-  reconnect.hidden = true;
-  let kind: '' | 'ok' | 'warn' | 'bad' = '';
-  let head: string;
-  let text = '';
-  if (s.startupError) {
-    kind = 'bad';
-    head = 'goto-sms could not start';
-    text = s.startupError;
-  } else if (s.credentialsUnreadable) {
-    kind = 'bad';
-    head = 'Credentials unreadable';
-    text = UNREADABLE;
-    // Client secret readable (configured) means only the saved GoTo login is unreadable.
-    reconnect.hidden = !s.configured;
-  } else if (s.loginExpired) {
-    kind = 'bad';
-    head = 'GoTo login expired';
-    text = 'GoTo refused the saved login. Reconnect to keep sending.';
-    reconnect.hidden = false;
-  } else if (!s.configured) {
-    kind = 'warn';
-    head = 'Not configured';
-    text = 'Enter your GoTo OAuth client ID and secret in step 1.';
-  } else if (!s.connected) {
-    kind = 'warn';
-    head = 'Not connected';
-    text = 'Connect to GoTo in step 2.';
-  } else if (!s.ready) {
-    kind = 'warn';
-    head = 'Connected';
-    text = 'Pick a sending number in step 3.';
-  } else {
-    kind = 'ok';
-    head = 'Ready';
-    text = 'Texts are sent from ' + (s.fromNumber ?? '') + '.';
+// --- Remembered "skip the test" (per mount, so two mounts on one origin don't collide) -------
+
+const SKIP_KEY = 'goto-sms:test-skipped:' + location.pathname;
+function skipped(): boolean {
+  try {
+    return localStorage.getItem(SKIP_KEY) === '1';
+  } catch {
+    return false;
   }
-  if (s.invalidFromNumber) {
-    text += ' The configured sending number is not a valid phone number.';
+}
+function setSkipped(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(SKIP_KEY, '1');
+    else localStorage.removeItem(SKIP_KEY);
+  } catch {
+    // Storage blocked (private window): the skip lasts for this page only.
   }
-  const previous = title.textContent;
-  banner.className = 'card banner span' + (kind ? ' ' + kind : '');
-  title.textContent = head;
-  detail.textContent = text;
-  if (previous !== head) announce(head + '. ' + text);
 }
 
-function renderClient(s: Status): void {
-  $('redirect-uri').textContent = s.redirectUri;
-  $('redirect-uri').hidden = !s.redirectUri;
-  $('copy-redirect').hidden = !s.redirectUri;
-  $('no-redirect').hidden = Boolean(s.redirectUri);
+// --- State ------------------------------------------------------------------------------------
 
-  const scopes = $('scopes');
-  scopes.replaceChildren(
+let status: Status | undefined;
+let view: 'loading' | 'setup' | 'manage' = 'loading';
+let openStep: StepNo = 1;
+/** The stepper was opened from the manage view with Change; finishing returns there. */
+let fromManage = false;
+/** Skip chosen this visit, when localStorage is unavailable. */
+let skippedNow = false;
+/** Incoming step finished this visit (Finish pressed). */
+let incomingDone = false;
+/** When the newest outbound text was sent (from the log or a test this visit). */
+let lastSent: string | undefined;
+let accounts: Account[] | undefined;
+let numbers: NumberEntry[] = [];
+/** Why the last GoTo sign-in failed (from the OAuth callback's ?error=). */
+let loginError: string | undefined;
+
+function done(s: Status, n: StepNo): boolean {
+  switch (n) {
+    case 1:
+      return s.configured;
+    case 2:
+      return s.connected;
+    case 3:
+      return s.ready;
+    case 4:
+      // A heuristic: any successful send in the newest 50 log rows (loadLog) counts as the test.
+      // An app that rarely sends may show this step again in a new browser; Skip is remembered.
+      return lastSent !== undefined || skippedNow || skipped();
+    case 5:
+      return incomingDone || s.incoming.mode !== 'off';
+  }
+}
+const requiredDone = (s: Status): boolean => ([1, 2, 3, 4] as const).every((n) => done(s, n));
+/** The first unfinished required step (1-4), if any. */
+const firstUnfinished = (s: Status): StepNo | undefined =>
+  ([1, 2, 3, 4] as const).find((n) => !done(s, n));
+/** The earlier step this one is waiting for: 2 needs 1, 3 needs 2, 4 and 5 need 3. */
+function waitingFor(s: Status, n: StepNo): StepNo | undefined {
+  const needs = ([1, 2, 3] as const).filter((k) => k < n);
+  return needs.find((k) => !done(s, k));
+}
+
+function stepSummary(s: Status, n: StepNo): string {
+  switch (n) {
+    case 1: {
+      if (locked(s, 'clientId') && locked(s, 'clientSecret')) return "Set by your app's config";
+      const id = s.clientId ?? '';
+      return 'Client ID ' + (id.length > 8 ? id.slice(0, 8) + '…' : id) + ', secret saved';
+    }
+    case 2:
+      return s.refreshSource === 'seeded-from-env'
+        ? 'Connected (from your app config)'
+        : 'Connected';
+    case 3: {
+      const name = accounts?.find((a) => a.key === s.accountKey)?.name;
+      return phone(s.fromNumber ?? '') + (name ? ' (' + name + ')' : '');
+    }
+    case 4:
+      return lastSent ? 'Test sent ' + time(lastSent) : 'Skipped';
+    case 5:
+      return MODE_LABEL[s.incoming.mode];
+  }
+}
+
+// --- Rendering --------------------------------------------------------------------------------
+
+function render(): void {
+  const s = status;
+  if (!s) return;
+  $('version').textContent = s.version;
+  const back = $<HTMLAnchorElement>('back');
+  back.hidden = !s.back;
+  if (s.back) {
+    back.href = s.back.url;
+    back.textContent = '← Back to ' + s.back.label;
+  }
+  $('startup-error').hidden = !s.startupError;
+  $('startup-text').textContent = s.startupError ?? '';
+  $('loading').hidden = view !== 'loading';
+  $('setup').hidden = view !== 'setup';
+  $('manage').hidden = view !== 'manage';
+  if (view === 'setup') renderSetup(s);
+  if (view === 'manage') renderManage(s);
+}
+
+function renderSetup(s: Status): void {
+  $('progress-text').textContent = 'Step ' + openStep + ' of 5 · ' + STEPS[openStep];
+  $('progress-fill').style.width = (openStep / 5) * 100 + '%';
+  btn('to-summary').hidden = !fromManage;
+  renderRail(s);
+  for (const n of [1, 2, 3, 4, 5] as const) $('step-' + n).hidden = n !== openStep;
+  renderStep1(s);
+  renderStep2(s);
+  renderStep3(s);
+  renderStep4(s);
+  renderStep5(s);
+}
+
+function renderRail(s: Status): void {
+  const items = ([1, 2, 3, 4, 5] as const).map((n) => {
+    const li = document.createElement('li');
+    const current = n === openStep;
+    const isDone = done(s, n) && !current;
+    const wait = waitingFor(s, n);
+    const state = current ? 'current' : isDone ? 'done' : wait ? 'blocked' : 'todo';
+    li.className = 'rail-item ' + state;
+    if (current) li.setAttribute('aria-current', 'step');
+
+    const marker = document.createElement('span');
+    marker.className = 'marker';
+    marker.setAttribute('aria-hidden', 'true');
+    marker.textContent = isDone ? '✓' : String(n);
+
+    const text = document.createElement('span');
+    text.className = 'rail-text';
+    const title = document.createElement('span');
+    title.className = 'rail-name';
+    title.textContent = STEPS[n];
+    const sub = document.createElement('span');
+    sub.className = 'rail-sub';
+    sub.textContent = isDone
+      ? stepSummary(s, n)
+      : state === 'blocked'
+        ? 'Needs step ' + String(wait)
+        : n === 5 && !current
+          ? 'Optional'
+          : '';
+    // The state in words, for screen readers (the marker is hidden).
+    const sr = document.createElement('span');
+    sr.className = 'sr-only';
+    sr.textContent = current ? ' (current step)' : isDone ? ' (done)' : '';
+    title.append(sr);
+    text.append(title);
+    if (sub.textContent) text.append(sub);
+    li.append(marker, text);
+
+    if (isDone) {
+      const change = document.createElement('button');
+      change.type = 'button';
+      change.className = 'linkish change';
+      change.textContent = 'Change';
+      change.setAttribute('aria-label', 'Change ' + STEPS[n]);
+      change.addEventListener('click', () => goTo(n, { focus: true }));
+      li.append(change);
+    }
+    return li;
+  });
+  $('rail').replaceChildren(...items);
+}
+
+function renderStep1(s: Status): void {
+  $('redirect-uri').textContent = s.redirectUri;
+  $('redirect-uri').parentElement!.hidden = !s.redirectUri;
+  $('no-redirect').hidden = Boolean(s.redirectUri);
+  $('scopes').replaceChildren(
     ...s.requiredScopes.map((scope) => {
       const li = document.createElement('li');
       const code = document.createElement('code');
-      code.textContent = scope;
-      li.append(code);
+      // Line breaks allowed after each dot on narrow screens (<wbr> adds no characters).
+      scope.split('.').forEach((part, i) => {
+        if (i > 0) code.append('.', document.createElement('wbr'));
+        code.append(part);
+      });
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'ghost small';
+      copy.textContent = 'Copy';
+      copy.setAttribute('aria-label', 'Copy ' + scope);
+      copy.addEventListener('click', () => copyText(scope, scope + ' copied', code));
+      li.append(code, copy);
       return li;
     }),
   );
 
-  const id = $<HTMLInputElement>('client-id');
-  const secret = $<HTMLInputElement>('client-secret');
   const idLocked = locked(s, 'clientId');
   const secretLocked = locked(s, 'clientSecret');
+  const id = input('client-id');
+  const secret = input('client-secret');
   // Don't overwrite what the admin is typing; refill only from a fresh status.
   if (document.activeElement !== id) id.value = s.clientId ?? '';
-  id.disabled = idLocked;
+  id.hidden = idLocked;
   $('client-id-locked').hidden = !idLocked;
-  secret.disabled = secretLocked;
+  $('client-id-locked').textContent = CONFIG + (s.clientId ? ': ' + s.clientId : '');
+  secret.hidden = secretLocked;
   $('client-secret-locked').hidden = !secretLocked;
   // The secret is write-only: never echoed back, only a hint that one is stored.
-  secret.placeholder = s.sources.clientSecret !== 'unset' ? SECRET_SAVED : '';
-  $<HTMLButtonElement>('save-cred').disabled = idLocked && secretLocked;
+  secret.placeholder = s.sources.clientSecret === 'store' && s.configured ? SECRET_SAVED : '';
+  // The client secret is stored but can't be decrypted: the key changed.
+  const unreadable = s.credentialsUnreadable && !s.configured;
+  $('cred-problem').hidden = !unreadable;
+  $('cred-problem').textContent = unreadable
+    ? "The saved client secret can't be read because the encryption key changed. Paste the secret again."
+    : '';
+  const bothLocked = idLocked && secretLocked;
+  btn('save-cred').textContent = bothLocked ? 'Continue' : 'Save and continue';
+  btn('save-cred').disabled = Boolean(s.startupError);
 }
 
-function renderConnect(s: Status): void {
-  $('connect').textContent = s.connected ? 'Reconnect to GoTo' : 'Connect to GoTo';
-  $('disconnect').hidden = !s.connected;
-}
-
-function renderIncoming(s: Status): void {
-  for (const input of document.querySelectorAll<HTMLInputElement>('input[name="incoming"]')) {
-    input.checked = input.value === s.incoming.mode;
-    if (input.value === 'webhook') input.disabled = !s.incoming.canWebhook;
+function renderStep2(s: Status): void {
+  const loginUnreadable = s.credentialsUnreadable && s.configured;
+  let problem = '';
+  if (loginUnreadable) {
+    problem =
+      "The saved GoTo login can't be read because the encryption key changed. Sign in again to replace it.";
+  } else if (s.loginExpired) {
+    problem = 'GoTo refused the saved login, so texts can’t be sent. Sign in again to fix it.';
   }
+  $('login-problem').hidden = !problem;
+  $('login-problem').textContent = problem;
+  $('goto-login-error').hidden = loginError !== 'goto_login' || s.connected;
+  $('connected-note').hidden = !s.connected;
+  const connect = btn('connect');
+  const again = s.loginExpired || loginUnreadable;
+  // Connected: Continue is the step's one primary action (Disconnect sits beside it).
+  connect.dataset.action = s.connected ? 'continue' : 'connect';
+  connect.textContent = s.connected ? 'Continue' : again ? 'Reconnect' : 'Connect to GoTo';
+  btn('disconnect').hidden = !s.connected;
+  $('connect-fine').hidden = s.connected;
+  connect.disabled = !s.configured || Boolean(s.startupError);
+}
+
+function renderStep3(s: Status): void {
+  const accountLocked = locked(s, 'accountKey');
+  const numberLocked = locked(s, 'fromNumber');
+  select('account').disabled = accountLocked;
+  $('account-locked').hidden = !accountLocked;
+  $('number-field').hidden = numberLocked || !$('typed-field').hidden;
+  $('number-locked').hidden = !numberLocked;
+  $('number-locked').textContent =
+    CONFIG.replace('set', 'Number set') + (s.fromNumber ? ': ' + phone(s.fromNumber) : '');
+  $('number-problem').hidden = !s.invalidFromNumber;
+  if (numberLocked) $('typed-field').hidden = true;
+  btn('save-number').disabled = !s.connected;
+}
+
+function renderStep4(s: Status): void {
+  const sentNow = $('test-msg').classList.contains('ok') && !$('test-msg').hidden;
+  // After a successful test, Continue is the one primary button.
+  btn('test-continue').hidden = !sentNow;
+  setPrimary(btn('send-test'), !sentNow);
+  btn('test-skip').hidden = sentNow;
+  btn('send-test').disabled = !s.ready;
+}
+
+function renderStep5(s: Status): void {
+  for (const r of incomingRadios()) {
+    if (r.value === 'webhook') r.disabled = !s.incoming.canWebhook;
+  }
+  $('webhook-reason').hidden = s.incoming.canWebhook;
   $('webhook-url').textContent = s.incoming.webhookUrl ?? '';
   $('webhook-url-row').hidden = !s.incoming.webhookUrl;
   // Moving the webhook to a newly picked account failed: texts to it aren't arriving.
@@ -257,39 +471,103 @@ function renderIncoming(s: Status): void {
     ? 'Incoming texts for the selected account are not set up: ' +
       err.message +
       (err.gotoStatus ? ' (GoTo ' + String(err.gotoStatus) + ')' : '') +
-      '.'
+      '. Choose Webhook and press ' +
+      (fromManage ? 'Save' : 'Finish') +
+      ' to try again.'
     : '';
-  $('incoming-retry').hidden = !err;
+  btn('finish').textContent = fromManage ? 'Save' : 'Finish';
 }
 
-function renderNumberLocks(s: Status): void {
-  const accountLocked = locked(s, 'accountKey');
-  const numberLocked = locked(s, 'fromNumber');
-  $<HTMLSelectElement>('account').disabled = accountLocked;
-  $('account-locked').hidden = !accountLocked;
-  $<HTMLSelectElement>('number').disabled = numberLocked;
-  $<HTMLInputElement>('typed-number').disabled = numberLocked;
-  $('number-locked').hidden = !numberLocked;
-  $<HTMLButtonElement>('save-number').disabled = accountLocked && numberLocked;
+function renderManage(s: Status): void {
+  const account = accounts?.find((a) => a.key === s.accountKey)?.name ?? s.accountKey;
+  $('ready-line').textContent =
+    'Sending from ' +
+    phone(s.fromNumber ?? '') +
+    (account ? ' (' + account + ')' : '') +
+    ' · Incoming: ' +
+    MODE_LABEL[s.incoming.mode];
+  const rows: Array<[StepNo, string]> = [
+    [1, 'Credentials'],
+    [2, 'GoTo login'],
+    [3, 'Sending number'],
+    [5, 'Incoming texts'],
+  ];
+  $('summary-rows').replaceChildren(
+    ...rows.map(([n, label]) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      // A div in a dl may hold only dt/dd, so the Change button sits inside the dd.
+      const dd = document.createElement('dd');
+      const value = document.createElement('span');
+      value.textContent = stepSummary(s, n);
+      const change = document.createElement('button');
+      change.type = 'button';
+      change.className = 'linkish change';
+      change.textContent = 'Change';
+      change.setAttribute('aria-label', 'Change ' + label.toLowerCase());
+      change.addEventListener('click', () => {
+        fromManage = true;
+        goTo(n, { focus: true });
+      });
+      dd.append(value, change);
+      row.append(dt, dd);
+      return row;
+    }),
+  );
 }
 
-function render(s: Status): void {
+// --- Navigation -------------------------------------------------------------------------------
+
+/** Opens step n in the stepper. Focus moves to its heading only on a transition. */
+const incomingRadios = () => document.querySelectorAll<HTMLInputElement>('input[name="incoming"]');
+
+function goTo(n: StepNo, o: { focus?: boolean } = {}): void {
+  view = 'setup';
+  openStep = n;
+  // Opening step 5 always starts from the saved mode, never a choice left unsaved earlier.
+  if (n === 5 && status) {
+    for (const r of incomingRadios()) r.checked = r.value === status.incoming.mode;
+  }
+  render();
+  if (n === 3) void loadAccounts();
+  if (o.focus) {
+    $('h-' + n).focus();
+    announce('Step ' + n + ' of 5: ' + STEPS[n]);
+  }
+}
+
+function showManage(o: { focus?: boolean } = {}): void {
+  view = 'manage';
+  fromManage = false;
+  render();
+  void loadLog().catch(() => {});
+  void loadOptOuts().catch(() => {});
+  if (!accounts && status?.connected) void loadAccounts();
+  if (o.focus) {
+    $('ready-title').focus();
+    announce('Setup complete. Ready to send texts.');
+  }
+}
+
+/** After a step succeeded: the next unfinished step, step 5 if not yet chosen, or the manage view. */
+function advance(from: StepNo): void {
+  const s = status;
+  if (!s) return;
+  const next = firstUnfinished(s);
+  if (next) goTo(next, { focus: true });
+  // First run: the optional incoming step comes before the summary, unless already set up.
+  else if (!fromManage && from < 5 && !done(s, 5)) goTo(5, { focus: true });
+  else showManage({ focus: true });
+}
+
+// --- Data -------------------------------------------------------------------------------------
+
+function apply(s: Status): void {
   status = s;
-  $('version').textContent = s.version;
-  renderBanner(s);
-  renderClient(s);
-  renderConnect(s);
-  renderNumberLocks(s);
-  renderIncoming(s);
+  render();
 }
-
-async function refreshStatus(): Promise<Status> {
-  const s = await api<Status>('api/status');
-  render(s);
-  return s;
-}
-
-// --- 3. Sending number ---------------------------------------------------------------------
 
 function option(value: string, label: string): HTMLOptionElement {
   const o = document.createElement('option');
@@ -301,91 +579,124 @@ function option(value: string, label: string): HTMLOptionElement {
 function useTypedNumber(on: boolean): void {
   $('typed-field').hidden = !on;
   $('number-field').hidden = on;
+  if (on && status?.fromNumber) input('typed-number').value = status.fromNumber;
 }
 
 function renderSmsHint(): void {
   const hint = $('sms-hint');
-  const picked = numbers.find((n) => n.number === $<HTMLSelectElement>('number').value);
-  hint.hidden = !picked;
+  const picked = numbers.find((n) => n.number === select('number').value);
+  hint.hidden = !picked || !$('typed-field').hidden;
   if (!picked) return;
   hint.textContent =
     picked.smsEnabled === false
-      ? 'GoTo says this number is not enabled for SMS. Enable SMS on it in GoTo Admin first.'
+      ? 'GoTo says this number is not enabled for SMS. Turn on SMS for it in GoTo Admin first.'
       : picked.smsEnabled === true
-        ? 'SMS is enabled on this number.'
-        : "GoTo didn't say whether this number can text; send a test to check.";
+        ? 'SMS is turned on for this number.'
+        : "GoTo didn't say whether this number can text. The test in the next step will tell.";
 }
 
-/** Lists the accounts and every account's numbers, grouped by account. */
-async function loadNumbers(s: Status): Promise<void> {
-  clear('number-msg');
-  const accountSelect = $<HTMLSelectElement>('account');
-  const numberSelect = $<HTMLSelectElement>('number');
-  let accounts: Account[];
-  try {
-    accounts = (await api<{ accounts: Account[] }>('api/accounts')).accounts;
-  } catch (err) {
-    showError('number-msg', err);
-    useTypedNumber(true);
+let accountsLoading: Promise<void> | undefined;
+/** Lists the accounts (once per visit), then the chosen account's numbers. */
+function loadAccounts(): Promise<void> {
+  const s = status;
+  if (!s?.connected) return Promise.resolve();
+  accountsLoading ??= (async () => {
+    clear('number-msg');
+    $('number-loading').hidden = false;
+    try {
+      accounts = (await api<{ accounts: Account[] }>('api/accounts')).accounts;
+    } catch (err) {
+      showError('number-msg', err);
+      useTypedNumber(true);
+      return;
+    } finally {
+      $('number-loading').hidden = true;
+    }
+    const accountSelect = select('account');
+    accountSelect.replaceChildren(
+      option('', 'Choose an account'),
+      ...accounts.map((a) => option(a.key, a.name || a.key)),
+    );
+    if (s.accountKey) {
+      // Keep a configured key selectable even if GoTo didn't list it.
+      if (!accounts.some((a) => a.key === s.accountKey)) {
+        accountSelect.append(option(s.accountKey, s.accountKey));
+      }
+      accountSelect.value = s.accountKey;
+    } else if (accounts.length === 1 && accounts[0]) {
+      accountSelect.value = accounts[0].key;
+    }
+    render();
+    await loadNumbers(accountSelect.value);
+  })().finally(() => {
+    accountsLoading = undefined;
+  });
+  return accountsLoading;
+}
+
+/** Fills the number list for one account. */
+async function loadNumbers(accountKey: string): Promise<void> {
+  const numberSelect = select('number');
+  numbers = [];
+  if (!accountKey) {
+    numberSelect.replaceChildren(option('', 'Choose an account first'));
+    renderSmsHint();
     return;
   }
-  accountSelect.replaceChildren(
-    option('', 'Choose an account'),
-    ...accounts.map((a) => option(a.key, a.name || a.key)),
-  );
-  if (s.accountKey) {
-    // Keep a configured key selectable even if GoTo didn't list it.
-    if (!accounts.some((a) => a.key === s.accountKey)) {
-      accountSelect.append(option(s.accountKey, s.accountKey));
-    }
-    accountSelect.value = s.accountKey;
-  } else if (accounts.length === 1 && accounts[0]) {
-    accountSelect.value = accounts[0].key;
-  }
-
+  numberSelect.replaceChildren(option('', 'Loading numbers…'));
   try {
-    const lists = await Promise.all(
-      accounts.map((a) =>
-        api<{ numbers: NumberEntry[] }>('api/numbers?accountKey=' + encodeURIComponent(a.key)),
-      ),
-    );
-    numbers = lists.flatMap((l) => l.numbers);
+    numbers = (
+      await api<{ numbers: NumberEntry[] }>(
+        'api/numbers?accountKey=' + encodeURIComponent(accountKey),
+      )
+    ).numbers;
   } catch (err) {
     showError('number-msg', err);
     useTypedNumber(true);
-    $<HTMLInputElement>('typed-number').value = s.fromNumber ?? '';
     return;
   }
   useTypedNumber(false);
-  numberSelect.replaceChildren(option('', 'Choose a number'));
-  for (const a of accounts) {
-    const group = document.createElement('optgroup');
-    group.label = a.name || a.key;
-    for (const n of numbers.filter((x) => x.accountKey === a.key)) {
-      const label =
-        n.number + (n.name ? ' — ' + n.name : '') + (n.smsEnabled === false ? ' (no SMS)' : '');
-      group.append(option(n.number, label));
-    }
-    if (group.children.length) numberSelect.append(group);
-  }
-  if (s.fromNumber) {
-    if (!numbers.some((n) => n.number === s.fromNumber)) {
-      numberSelect.append(option(s.fromNumber, s.fromNumber));
-    }
-    numberSelect.value = s.fromNumber;
-  }
+  numberSelect.replaceChildren(
+    option('', numbers.length ? 'Choose a number' : 'This account has no numbers'),
+    ...numbers.map((n) =>
+      option(
+        n.number,
+        phone(n.number) +
+          (n.name ? ' (' + n.name + ')' : '') +
+          (n.smsEnabled === false ? ', no SMS' : ''),
+      ),
+    ),
+  );
+  const current = status?.fromNumber;
+  if (current && numbers.some((n) => n.number === current)) numberSelect.value = current;
+  else if (numbers.length === 1 && numbers[0]) numberSelect.value = numbers[0].number;
+  if (status) renderStep3(status);
   renderSmsHint();
 }
 
-// --- 6. Activity ---------------------------------------------------------------------------
-
-const when = (iso: string): string => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
-};
+/** The log table, and the newest successful send (step 4 counts it as a test). */
+async function loadLog(): Promise<void> {
+  const { entries } = await api<{ entries: LogEntry[] }>('api/log?limit=50');
+  // Only the newest 50 rows are read, so an older send isn't seen (see done(), step 4).
+  lastSent ??= entries.find((e) => e.direction === 'outbound' && e.status === 'sent')?.at;
+  $('log-body').replaceChildren(
+    ...entries.map((e) =>
+      tableRow([
+        ['Time', when(e.at)],
+        ['Direction', e.direction],
+        ['From', e.from],
+        ['To', e.to],
+        ['Status', e.status],
+        ['Reason', e.reason ?? ''],
+      ]),
+    ),
+  );
+  $('log-empty').hidden = entries.length > 0;
+  $('log-body').closest('table')!.hidden = entries.length === 0;
+}
 
 /** A table row whose cells carry data-label, for the stacked-card layout on phones. */
-function row(cells: Array<[string, string | Node]>): HTMLTableRowElement {
+function tableRow(cells: Array<[string, string | Node]>): HTMLTableRowElement {
   const tr = document.createElement('tr');
   for (const [label, value] of cells) {
     const td = document.createElement('td');
@@ -399,33 +710,16 @@ function row(cells: Array<[string, string | Node]>): HTMLTableRowElement {
   return tr;
 }
 
-async function loadLog(): Promise<void> {
-  const { entries } = await api<{ entries: LogEntry[] }>('api/log?limit=50');
-  $('log-body').replaceChildren(
-    ...entries.map((e) =>
-      row([
-        ['Time', when(e.at)],
-        ['Direction', e.direction],
-        ['From', e.from],
-        ['To', e.to],
-        ['Status', e.status],
-        ['Reason', e.reason ?? ''],
-      ]),
-    ),
-  );
-  $('log-empty').hidden = entries.length > 0;
-}
-
 function renderOptOuts(list: OptOut[]): void {
   $('optout-body').replaceChildren(
     ...list.map((o) => {
       const remove = document.createElement('button');
       remove.type = 'button';
-      remove.className = 'secondary';
+      remove.className = 'ghost small';
       remove.textContent = 'Remove';
       remove.setAttribute('aria-label', 'Remove opt-out for ' + o.number);
       remove.addEventListener('click', () => void changeOptOut(remove, o.number, 'remove'));
-      return row([
+      return tableRow([
         ['Number', o.number],
         ['Since', when(o.at)],
         ['Source', o.source],
@@ -434,6 +728,7 @@ function renderOptOuts(list: OptOut[]): void {
     }),
   );
   $('optout-empty').hidden = list.length > 0;
+  $('optout-body').closest('table')!.hidden = list.length === 0;
 }
 
 async function loadOptOuts(): Promise<void> {
@@ -454,27 +749,52 @@ async function changeOptOut(
         'ok',
         action === 'add' ? number + ' will not be texted.' : number + ' can be texted again.',
       );
-      if (action === 'add') $<HTMLInputElement>('optout-number').value = '';
+      if (action === 'add') input('optout-number').value = '';
     } catch (err) {
       showError('optout-msg', err);
     }
   });
 }
 
-// --- Actions -------------------------------------------------------------------------------
+// --- Actions ----------------------------------------------------------------------------------
+
+/** Copies text; without a clipboard (plain http) selects `fallback` for a manual copy. */
+function copyText(text: string, done: string, fallback: HTMLElement): void {
+  const select = () => {
+    const range = document.createRange();
+    range.selectNodeContents(fallback);
+    getSelection()?.removeAllRanges();
+    getSelection()?.addRange(range);
+    announce("Couldn't copy automatically; the text is selected, copy it by hand");
+  };
+  if (!navigator.clipboard) return select();
+  navigator.clipboard.writeText(text).then(() => announce(done), select);
+}
 
 async function saveCredentials(): Promise<void> {
   const s = status;
   if (!s) return;
+  const idLocked = locked(s, 'clientId');
+  const secretLocked = locked(s, 'clientSecret');
+  if (idLocked && secretLocked) return advance(1);
   // Only fields the admin can edit: a locked (options/env) field is never posted.
   const body: Record<string, string> = {};
-  if (!locked(s, 'clientId')) body.clientId = $<HTMLInputElement>('client-id').value.trim();
-  const secret = $<HTMLInputElement>('client-secret');
-  if (!locked(s, 'clientSecret') && secret.value) body.clientSecret = secret.value.trim();
+  const id = input('client-id').value.trim();
+  const secret = input('client-secret').value.trim();
+  if (!idLocked) {
+    if (!id) return show('cred-msg', 'bad', 'Paste the client ID from GoTo.');
+    body.clientId = id;
+  }
+  if (!secretLocked) {
+    const stored = s.sources.clientSecret === 'store' && s.configured;
+    if (!secret && !stored) return show('cred-msg', 'bad', 'Paste the client secret from GoTo.');
+    if (secret) body.clientSecret = secret;
+  }
   try {
-    render(await api<Status>('api/credentials', body));
-    secret.value = '';
-    show('cred-msg', 'ok', 'Saved.');
+    apply(await api<Status>('api/credentials', body));
+    input('client-secret').value = '';
+    clear('cred-msg');
+    if (status?.configured) advance(1);
   } catch (err) {
     showError('cred-msg', err);
   }
@@ -494,19 +814,19 @@ async function saveNumber(): Promise<void> {
   if (!s) return;
   const body: Record<string, string> = {};
   if (!locked(s, 'accountKey')) {
-    const key = $<HTMLSelectElement>('account').value;
+    const key = select('account').value;
     if (key) body.accountKey = key;
   }
   if (!locked(s, 'fromNumber')) {
     const typed = !$('typed-field').hidden;
-    const n = typed
-      ? $<HTMLInputElement>('typed-number').value.trim()
-      : $<HTMLSelectElement>('number').value;
-    if (n) body.fromNumber = n;
+    const n = typed ? input('typed-number').value.trim() : select('number').value;
+    if (!n) return show('number-msg', 'bad', 'Choose the number to send from.');
+    body.fromNumber = n;
   }
   try {
-    render(await api<Status>('api/selection', body));
-    show('number-msg', 'ok', 'Saved.');
+    apply(await api<Status>('api/selection', body));
+    clear('number-msg');
+    if (status?.ready) advance(3);
   } catch (err) {
     showError('number-msg', err);
   }
@@ -515,121 +835,138 @@ async function saveNumber(): Promise<void> {
 const RESULT_TEXT: Record<string, string> = {
   sent: 'Sent',
   opted_out: 'Not sent: that number opted out',
-  invalid_number: 'Not sent: invalid number',
+  invalid_number: 'Not sent: that isn’t a valid phone number',
   uncertain: 'Unclear whether it was sent',
-  not_connected: 'Not sent: not connected',
-  rejected: 'Rejected by GoTo',
+  not_connected: 'Not sent: not connected to GoTo',
+  rejected: 'GoTo refused the text',
 };
 
-async function sendTest(): Promise<void> {
-  const to = $<HTMLInputElement>('test-to').value;
+/** Sends the fixed test text; the reason is shown verbatim (GoTo's or the package's words). */
+async function sendTest(toId: string, msgId: string): Promise<boolean> {
+  const to = input(toId).value.trim();
+  if (!to) {
+    show(msgId, 'bad', 'Enter the mobile number to text.');
+    return false;
+  }
   try {
     const r = await api<SendResult>('api/test', { to });
-    // The reason is shown verbatim: it's GoTo's (or the package's) own explanation.
-    const head = (RESULT_TEXT[r.status] ?? r.status) + (r.to ? ' (' + r.to + ')' : '');
-    show('test-msg', r.status === 'sent' ? 'ok' : 'bad', r.reason ? head + ': ' + r.reason : head);
+    const head = (RESULT_TEXT[r.status] ?? r.status) + (r.to ? ' to ' + phone(r.to) : '');
+    show(msgId, r.status === 'sent' ? 'ok' : 'bad', r.reason ? head + ': ' + r.reason : head + '.');
+    if (r.status === 'sent') lastSent = new Date().toISOString();
     void loadLog().catch(() => {});
+    return r.status === 'sent';
   } catch (err) {
-    showError('test-msg', err);
+    showError(msgId, err);
+    return false;
   }
 }
 
-async function setIncoming(mode: Mode): Promise<void> {
-  const radios = document.querySelectorAll<HTMLInputElement>('input[name="incoming"]');
-  for (const r of radios) r.disabled = true;
-  try {
-    render(await api<Status>('api/incoming', { mode }));
-    show('incoming-msg', 'ok', 'Incoming texts: ' + mode + '.');
-  } catch (err) {
-    showError('incoming-msg', err);
-  } finally {
-    for (const r of radios) r.disabled = false;
-    // Re-applies canWebhook and snaps the radio back if the switch failed.
-    if (status) renderIncoming(status);
+async function finishIncoming(): Promise<void> {
+  const s = status;
+  if (!s) return;
+  const picked = document.querySelector<HTMLInputElement>('input[name="incoming"]:checked');
+  const mode = (picked?.value ?? s.incoming.mode) as Mode;
+  // Re-subscribing an unchanged webhook would call GoTo for nothing; a failed move retries.
+  if (mode !== s.incoming.mode || s.incoming.error) {
+    try {
+      apply(await api<Status>('api/incoming', { mode }));
+    } catch (err) {
+      showError('incoming-msg', err);
+      return;
+    }
   }
+  clear('incoming-msg');
+  incomingDone = true;
+  advance(5);
 }
 
 /** Explains ?connected=1 / ?error=… left by the OAuth callback, then tidies the URL. */
-function handleCallbackResult(): void {
+function readCallbackResult(): 'connected' | 'error' | undefined {
   const params = new URLSearchParams(location.search);
   const error = params.get('error');
-  if (params.get('connected') === '1') show('connect-msg', 'ok', 'Connected to GoTo.');
-  else if (error === 'goto_login')
-    show('connect-msg', 'bad', 'GoTo refused the login. ' + GOTO_LOGIN);
-  else if (error === 'bad_state') {
-    show('connect-msg', 'bad', 'That login link expired or was already used. Click Connect again.');
-  } else if (error) show('connect-msg', 'bad', 'Connecting failed (' + error + '). Try again.');
   if (params.has('connected') || error) history.replaceState(null, '', location.pathname);
+  if (params.get('connected') === '1') return 'connected';
+  if (!error) return undefined;
+  loginError = error;
+  if (error === 'bad_state') {
+    show('connect-msg', 'bad', 'That sign-in link expired or was already used. Connect again.');
+  } else if (error !== 'goto_login') {
+    show('connect-msg', 'bad', 'Signing in failed (' + error + '). Try again.');
+  }
+  return 'error';
+}
+
+function onSubmit(formId: string, fn: () => Promise<void>): void {
+  $(formId).addEventListener('submit', (e) => {
+    e.preventDefault();
+    const b = (e.target as HTMLFormElement).querySelector<HTMLButtonElement>('button[type=submit]');
+    if (b) void busy(b, fn);
+  });
 }
 
 function wire(): void {
-  $('cred-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    void busy($<HTMLButtonElement>('save-cred'), saveCredentials);
+  onSubmit('cred-form', saveCredentials);
+  btn('copy-redirect').addEventListener('click', () =>
+    copyText(status?.redirectUri ?? '', 'Redirect URI copied', $('redirect-uri')),
+  );
+  btn('copy-scopes').addEventListener('click', () =>
+    copyText((status?.requiredScopes ?? []).join(' '), 'All scopes copied', $('scopes')),
+  );
+  btn('connect').addEventListener('click', () => {
+    const b = btn('connect');
+    if (b.dataset.action === 'continue') advance(2);
+    else void busy(b, connect);
   });
-  $('copy-redirect').addEventListener('click', () => {
-    const uri = status?.redirectUri ?? '';
-    navigator.clipboard.writeText(uri).then(
-      () => announce('Redirect URI copied'),
-      () => {
-        // No clipboard (e.g. plain http): select it so the admin can copy by hand.
-        const range = document.createRange();
-        range.selectNodeContents($('redirect-uri'));
-        getSelection()?.removeAllRanges();
-        getSelection()?.addRange(range);
-        announce('Copy failed; the redirect URI is selected, copy it manually');
-      },
-    );
-  });
-  for (const id of ['connect', 'reconnect']) {
-    const b = $<HTMLButtonElement>(id);
-    b.addEventListener('click', () => void busy(b, connect));
-  }
-  $('disconnect').addEventListener('click', () => {
-    const b = $<HTMLButtonElement>('disconnect');
-    void busy(b, async () => {
+  btn('disconnect').addEventListener('click', () => {
+    void busy(btn('disconnect'), async () => {
       try {
-        render(await api<Status>('api/disconnect', {}));
+        apply(await api<Status>('api/disconnect', {}));
         show('connect-msg', 'ok', 'Disconnected from GoTo.');
       } catch (err) {
         showError('connect-msg', err);
       }
     });
   });
-  $('account').addEventListener('change', () => clear('number-msg'));
-  $('number').addEventListener('change', () => {
-    // Picking a number picks its account too.
-    const picked = numbers.find((n) => n.number === $<HTMLSelectElement>('number').value);
-    const account = $<HTMLSelectElement>('account');
-    if (picked && !account.disabled) account.value = picked.accountKey;
-    renderSmsHint();
+  btn('to-step-1').addEventListener('click', () => {
+    goTo(1);
+    $('redirect-item').scrollIntoView({ block: 'center' });
+    btn('copy-redirect').focus();
   });
-  $('load-numbers').addEventListener('click', () => {
-    const b = $<HTMLButtonElement>('load-numbers');
-    if (status) void busy(b, () => loadNumbers(status!));
+  btn('to-summary').addEventListener('click', () => {
+    // A Change (e.g. Disconnect) can leave a required step unfinished: finish that first.
+    const next = status && firstUnfinished(status);
+    if (next) goTo(next, { focus: true });
+    else showManage({ focus: true });
   });
-  $('number-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    void busy($<HTMLButtonElement>('save-number'), saveNumber);
+
+  select('account').addEventListener('change', () => {
+    clear('number-msg');
+    void loadNumbers(select('account').value);
   });
-  $('test-form').addEventListener('submit', (e) => {
-    e.preventDefault();
-    void busy($<HTMLButtonElement>('send-test'), sendTest);
+  select('number').addEventListener('change', renderSmsHint);
+  onSubmit('number-form', saveNumber);
+
+  onSubmit('test-form', async () => {
+    await sendTest('test-to', 'test-msg');
+    if (status) render();
   });
-  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="incoming"]')) {
-    r.addEventListener('change', () => void setIncoming(r.value as Mode));
-  }
-  // The webhook radio is already checked when a re-subscribe failed, so it can't fire change.
-  $('incoming-retry').addEventListener('click', () => {
-    void busy($<HTMLButtonElement>('incoming-retry'), () => setIncoming('webhook'));
+  btn('test-continue').addEventListener('click', () => advance(4));
+  btn('test-skip').addEventListener('click', () => {
+    skippedNow = true;
+    setSkipped(true);
+    advance(4);
   });
-  $('refresh-log').addEventListener('click', () => {
-    const b = $<HTMLButtonElement>('refresh-log');
-    void busy(b, () => loadLog().catch(() => announce('Could not load messages')));
+  btn('finish').addEventListener('click', () => void busy(btn('finish'), finishIncoming));
+
+  onSubmit('m-test-form', async () => {
+    await sendTest('m-test-to', 'm-test-msg');
+  });
+  btn('refresh-log').addEventListener('click', () => {
+    void busy(btn('refresh-log'), () => loadLog().catch(() => announce('Could not load messages')));
   });
   $('optout-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    const number = $<HTMLInputElement>('optout-number').value.trim();
+    const number = input('optout-number').value.trim();
     const b = (e.target as HTMLFormElement).querySelector('button')!;
     if (number) void changeOptOut(b, number, 'add');
   });
@@ -637,23 +974,32 @@ function wire(): void {
 
 async function main(): Promise<void> {
   wire();
-  handleCallbackResult();
+  const callback = readCallbackResult();
   let s: Status;
   try {
-    s = await refreshStatus();
+    s = await api<Status>('api/status');
   } catch (err) {
-    $('banner-title').textContent = 'Could not load status';
-    $('banner-detail').textContent =
-      err instanceof ApiError ? err.message : 'The server did not answer.';
-    $('status').className = 'card banner span bad';
+    $('loading').textContent =
+      "Couldn't load the setup status: " +
+      (err instanceof ApiError ? err.message : 'the server did not answer.');
+    $('loading').className = 'alert bad';
     announce('Could not load status');
     return;
   }
-  if (s.startupError) return;
-  // Activity and numbers need a working instance; failures show inline, not as a crash.
-  void loadLog().catch(() => {});
-  void loadOptOuts().catch(() => {});
-  if (s.connected) void loadNumbers(s);
+  status = s;
+  // The log decides whether the test step is already done, so read it before choosing a step.
+  if (!s.startupError && s.connected) await loadLog().catch(() => {});
+
+  if (callback === 'connected' && s.connected) {
+    announce('Connected to GoTo');
+    goTo(firstUnfinished(s) === 1 ? 1 : 3, { focus: true });
+  } else if (callback === 'error') {
+    goTo(s.configured ? 2 : 1, { focus: true });
+  } else if (!s.startupError && requiredDone(s)) {
+    showManage();
+  } else {
+    goTo(firstUnfinished(s) ?? 1);
+  }
 }
 
 void main();

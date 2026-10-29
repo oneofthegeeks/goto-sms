@@ -28,8 +28,18 @@ const ENV_NAMES: Record<ConfigField, string> = {
   fromNumber: 'GOTO_FROM_NUMBER',
 };
 const storeKey = (field: ConfigField) => `config:${field}`;
-// '' counts as unset: Docker .env files commonly contain `GOTO_CLIENT_ID=`.
-const nonEmpty = (v: string | undefined): string | undefined => (v ? v : undefined);
+
+/**
+ * An option or env value, or undefined when it is effectively unset: blank (Docker .env files
+ * commonly contain `GOTO_CLIENT_ID=`) or the literal `CHANGEME` placeholder secret managers
+ * use for keys not filled in yet. Real values are returned untrimmed: the encryption key is
+ * hashed as given, so trimming it would change the key.
+ */
+export function configValue(v: string | undefined): string | undefined {
+  if (v === undefined) return undefined;
+  const t = v.trim();
+  return t === '' || t.toLowerCase() === 'changeme' ? undefined : v;
+}
 
 /** Resolves credentials with precedence options > env > store; only the store layer is writable. */
 export class ConfigResolver {
@@ -55,9 +65,9 @@ export class ConfigResolver {
 
   /** Which non-store layer (if any) supplies `field`, with its raw value. */
   private fixedValue(field: ConfigField): { source: 'options' | 'env'; value: string } | undefined {
-    const fromOption = nonEmpty(this.options[field]);
+    const fromOption = configValue(this.options[field]);
     if (fromOption) return { source: 'options', value: fromOption };
-    const fromEnv = nonEmpty(this.env[ENV_NAMES[field]]);
+    const fromEnv = configValue(this.env[ENV_NAMES[field]]);
     if (fromEnv) return { source: 'env', value: fromEnv };
     return undefined;
   }
@@ -155,6 +165,6 @@ export class ConfigResolver {
   }
 
   seedRefreshToken(): string | undefined {
-    return nonEmpty(this.options.refreshToken) ?? nonEmpty(this.env.GOTO_REFRESH_TOKEN);
+    return configValue(this.options.refreshToken) ?? configValue(this.env.GOTO_REFRESH_TOKEN);
   }
 }

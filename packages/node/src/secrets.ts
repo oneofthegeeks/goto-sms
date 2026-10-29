@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { configValue } from './config.js';
 import { DecryptError, GoToSmsError, NotConfiguredError } from './errors.js';
 import type { Logger } from './types.js';
 
@@ -55,11 +56,25 @@ export async function resolveEncryptionKey(o: {
   dataDir?: string;
   logger: Logger;
 }): Promise<{ key: Buffer; source: 'option' | 'env' | 'keyfile' }> {
-  if (o.optionKey) return { key: sha256(o.optionKey), source: 'option' };
-  const envKey = o.env.GOTO_SMS_ENCRYPTION_KEY;
+  // 0.1.x hashed a CHANGEME or blank key as a real key; say so when one is now ignored, since
+  // secrets saved under it become unreadable. The value itself is never logged.
+  const placeholder = (raw: string | undefined, name: string): void => {
+    if (raw !== undefined && raw !== '' && configValue(raw) === undefined) {
+      o.logger.warn(
+        `${name} is a placeholder (blank or CHANGEME) and is ignored; secrets saved under it in goto-sms 0.1.x must be re-entered`,
+      );
+    }
+  };
+  placeholder(o.optionKey, 'The encryptionKey option');
+  placeholder(o.env.GOTO_SMS_ENCRYPTION_KEY, 'GOTO_SMS_ENCRYPTION_KEY');
+  const optionKey = configValue(o.optionKey);
+  if (optionKey) return { key: sha256(optionKey), source: 'option' };
+  const envKey = configValue(o.env.GOTO_SMS_ENCRYPTION_KEY);
   if (envKey) return { key: sha256(envKey), source: 'env' };
   if (!o.dataDir) {
-    throw new NotConfiguredError('Set GOTO_SMS_ENCRYPTION_KEY (required when no dataDir is used)');
+    throw new NotConfiguredError(
+      'Set GOTO_SMS_ENCRYPTION_KEY (or give a dataDir/store the package can keep a key file in)',
+    );
   }
 
   const file = join(o.dataDir, '.goto-sms.key');
@@ -82,8 +97,10 @@ export async function resolveEncryptionKey(o: {
     key = await readFile(file);
   }
   if (key.length !== KEY_BYTES) {
+    // The message reaches the setup page, so the path goes to the log only.
+    o.logger.warn(`Encryption keyfile ${file} is ${key.length} bytes, expected ${KEY_BYTES}`);
     throw new GoToSmsError(
-      `Encryption keyfile ${file} is ${key.length} bytes, expected ${KEY_BYTES}; delete it only if no stored secrets need it`,
+      "The encryption key file is damaged, so saved secrets can't be read. Set GOTO_SMS_ENCRYPTION_KEY, or delete the key file only if no saved secrets need it (the server log names the file)",
       'bad_keyfile',
     );
   }

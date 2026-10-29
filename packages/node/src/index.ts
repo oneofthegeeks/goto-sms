@@ -7,7 +7,13 @@ export { MemoryStore } from './store/memory.js';
 export { FileStore } from './store/file.js';
 export { SqliteStore } from './store/sqlite.js';
 export { createGoToSms } from './client.js';
-export type { GoToSms, GoToSmsOptions, IncomingMode } from './client.js';
+export type {
+  Authorize,
+  AuthorizeRequest,
+  GoToSms,
+  GoToSmsOptions,
+  IncomingMode,
+} from './client.js';
 export type { StatusPayload, IncomingError } from './server/status.js';
 // Types that public signatures reference, so hosts can name them.
 export type { ConfigField, Source } from './config.js';
