@@ -41,3 +41,7 @@ npm run e2e   # Playwright (run `npx playwright install chromium` once)
 ## License
 
 MIT
+
+## Security and contributing
+
+Report vulnerabilities privately; see [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).

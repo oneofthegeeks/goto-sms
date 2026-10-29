@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in goto-sms doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security problem?** Don't file it here. Use [private vulnerability reporting](https://github.com/oneofthegeeks/goto-sms/security/advisories/new) instead.
+        **Never paste** client secrets, tokens, the webhook URL, phone numbers or message text. Mask them (e.g. `…0100`).
+  - type: input
+    id: version
+    attributes:
+      label: goto-sms version
+      placeholder: '0.2.0'
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Node and Express versions
+      placeholder: 'Node 24.1, Express 5.3'
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Sending
+        - Incoming (webhook)
+        - Incoming (polling)
+        - STOP / START / HELP
+        - Setup page
+        - OAuth / login
+        - Storage
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Include the exact error text or the SendResult status and reason.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest setup that shows it. Use masked values.
