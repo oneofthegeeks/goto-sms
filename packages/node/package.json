@@ -1,6 +1,6 @@
 {
   "name": "@oneofthegeeks/goto-sms",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Unofficial Node client for GoTo Connect SMS",
   "type": "module",
   "main": "dist/index.cjs",
@@ -41,7 +41,7 @@
     "url": "https://github.com/oneofthegeeks/goto-sms/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "embed": "node scripts/embed-setup.mjs",
@@ -55,7 +55,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "express": "^5.3.0"
   },
   "peerDependencies": {

@@ -11,7 +11,7 @@ STOP/START/HELP handling are built in.
 npm install @oneofthegeeks/goto-sms express
 ```
 
-The Node package is `@oneofthegeeks/goto-sms` (not yet published; 0.1.0 is pending). See
+The Node package is `@oneofthegeeks/goto-sms` on npm. See
 [`packages/node/README.md`](packages/node/README.md) for the quick start, configuration, incoming
 texts, storage and troubleshooting.
 

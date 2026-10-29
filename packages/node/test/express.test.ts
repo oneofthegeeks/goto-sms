@@ -57,12 +57,12 @@ test('GET /goto-sms/ serves html containing goto-sms v', async () => {
   const html = await res.text();
   assert.ok(html.includes('goto-sms v'));
   // The real page, not the stub embed-setup.mjs writes when setup-ui wasn't built.
-  assert.ok(html.includes('GoTo OAuth client'), 'run npm run build first: got the stub page');
+  assert.ok(html.includes('Create your GoTo app'), 'run npm run build first: got the stub page');
 });
 
 test('page has no absolute /goto-sms/ or /api/ URLs', () => {
   const absolute = /["'`](\/goto-sms|\/api)\//;
-  assert.ok(SETUP_HTML.includes('GoTo OAuth client'), 'run npm run build first: got the stub');
+  assert.ok(SETUP_HTML.includes('Create your GoTo app'), 'run npm run build first: got the stub');
   assert.ok(!absolute.test(SETUP_HTML));
   // The sources too, so the check means something even before a build.
   for (const f of ['index.html', 'app.ts']) {
@@ -192,7 +192,7 @@ test('the page and status still answer when startup failed', async () => {
   assert.equal(status.configured, false);
   assert.equal(
     status.startupError,
-    'Set GOTO_SMS_ENCRYPTION_KEY (required when no dataDir is used)',
+    'Set GOTO_SMS_ENCRYPTION_KEY (or give a dataDir/store the package can keep a key file in)',
   );
   const save = await fetch(`${base}/goto-sms/api/credentials`, jsonPost(base, '{}'));
   assert.equal(save.status, 400);
@@ -261,4 +261,22 @@ test('HEAD /callback does not consume the OAuth state', async () => {
   const get = await fetch(url, { redirect: 'manual' });
   assert.equal(get.status, 302);
   assert.equal(get.headers.get('location'), './?connected=1');
+});
+
+test('loginUrl: an unauthorized page load redirects, also when startup failed; the API stays 403', async () => {
+  const sms = createGoToSms({
+    store: new MemoryStore(),
+    env: {},
+    logger: silent,
+    authorize: () => false,
+    loginUrl: '/login',
+  });
+  cleanups.push(() => sms.close());
+  const app = express();
+  app.use('/goto-sms', sms.router());
+  const base = await listen(app);
+  const page = await fetch(`${base}/goto-sms/`, { redirect: 'manual' });
+  assert.equal(page.status, 302);
+  assert.equal(page.headers.get('location'), '/login');
+  assert.equal((await fetch(`${base}/goto-sms/api/status`)).status, 403);
 });

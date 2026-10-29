@@ -190,3 +190,37 @@ test('seedRefreshToken prefers the option, then env, ignoring blanks', () => {
     undefined,
   );
 });
+
+test('blank and CHANGEME values count as unset, in options and env', async () => {
+  const store = new MemoryStore();
+  await store.set(T, 'config:clientId', 'from-store');
+  const { cfg } = make({
+    store,
+    options: { clientId: 'CHANGEME', accountKey: '   ' },
+    env: { GOTO_CLIENT_ID: ' changeme ', GOTO_ACCOUNT_KEY: '\t', GOTO_CLIENT_SECRET: 'ChangeMe' },
+  });
+  const r = await cfg.resolve();
+  assert.equal(r.clientId, 'from-store');
+  assert.equal(r.sources.clientId, 'store');
+  assert.equal(r.sources.accountKey, 'unset');
+  assert.equal(r.sources.clientSecret, 'unset');
+  // A placeholder isn't "set by config", so the setup page can save a real value.
+  await cfg.save({ clientId: 'real-id' });
+  assert.equal((await cfg.resolve()).clientId, 'real-id');
+});
+
+test('real values are kept untrimmed', async () => {
+  const r = await make({ env: { GOTO_CLIENT_ID: ' id-with-spaces ' } }).cfg.resolve();
+  assert.equal(r.clientId, ' id-with-spaces ');
+});
+
+test('seedRefreshToken ignores a CHANGEME placeholder', () => {
+  assert.equal(
+    make({
+      options: { refreshToken: 'CHANGEME' },
+      env: { GOTO_REFRESH_TOKEN: 'e' },
+    }).cfg.seedRefreshToken(),
+    'e',
+  );
+  assert.equal(make({ env: { GOTO_REFRESH_TOKEN: 'changeme' } }).cfg.seedRefreshToken(), undefined);
+});

@@ -12,162 +12,284 @@
   </head>
   <body>
     <header class="top">
+      <a id="back" class="back" hidden></a>
       <h1>GoTo SMS setup</h1>
-      <p class="muted">Connect this app to GoTo Connect so it can send and receive texts.</p>
+      <p class="lede">Connect this app to GoTo Connect so it can send and receive texts.</p>
     </header>
 
-    <!-- Status changes are announced here for screen readers. -->
+    <!-- Progress and results are announced here for screen readers. -->
     <div id="live" class="sr-only" aria-live="polite" role="status"></div>
 
-    <main class="grid">
-      <section id="status" class="card banner span" aria-labelledby="banner-title">
-        <h2 id="banner-title">Loading status…</h2>
-        <p id="banner-detail" class="muted"></p>
-        <button id="reconnect" type="button" hidden>Reconnect</button>
-      </section>
+    <main class="page">
+      <div id="startup-error" class="alert bad" role="alert" hidden>
+        <p><strong>The texting connection couldn't start.</strong></p>
+        <p id="startup-text"></p>
+      </div>
+      <p id="loading" class="muted">Loading…</p>
 
-      <section class="card" aria-labelledby="h-client">
-        <h2 id="h-client">1. GoTo OAuth client</h2>
-        <ol class="steps">
-          <li>
-            Sign in at
-            <a href="https://developer.goto.com" target="_blank" rel="noopener noreferrer"
-              >developer.goto.com</a
-            >
-            and create an OAuth client.
-          </li>
-          <li>
-            Add this redirect URI to the client:
-            <div class="copy-row">
-              <code id="redirect-uri" class="wrap"></code>
-              <button id="copy-redirect" type="button" class="secondary">Copy</button>
-            </div>
-            <p id="no-redirect" class="warn" hidden>
-              No public URL is set, so there is no redirect URI yet. Set <code>publicUrl</code> (or
-              <code>GOTO_SMS_PUBLIC_URL</code>) and restart.
+      <!-- Setup mode: one step open at a time. -->
+      <div id="setup" class="setup" hidden>
+        <p class="progress" aria-hidden="true">
+          <span id="progress-text">Step 1 of 5</span>
+          <span class="bar"><span id="progress-fill"></span></span>
+        </p>
+
+        <nav class="rail" aria-labelledby="rail-title">
+          <h2 id="rail-title" class="rail-title">All steps</h2>
+          <ol id="rail"></ol>
+        </nav>
+
+        <div class="panel">
+          <button id="to-summary" type="button" class="linkish to-summary" hidden>
+            ← Back to summary
+          </button>
+
+          <!-- 1. Credentials -->
+          <section class="step" id="step-1" aria-labelledby="h-1" hidden>
+            <h2 id="h-1" tabindex="-1">Create your GoTo app</h2>
+            <p class="intro">
+              GoTo needs to know about this app before it can sign you in. Create an OAuth client in
+              GoTo's developer portal, then paste its ID and secret here.
             </p>
-          </li>
-          <li>
-            Enable these scopes on the client:
-            <ul id="scopes" class="scopes"></ul>
-          </li>
-          <li>Paste the client ID and secret below.</li>
-        </ol>
-        <p class="note">
-          GoTo shows the client secret only once, when you create the client. Copy it then.
-        </p>
-        <form id="cred-form" class="form">
-          <div class="field">
-            <label for="client-id">Client ID</label>
-            <input id="client-id" name="clientId" autocomplete="off" spellcheck="false" />
-            <span id="client-id-locked" class="locked" hidden>set by config</span>
-          </div>
-          <div class="field">
-            <label for="client-secret">Client secret</label>
-            <input
-              id="client-secret"
-              name="clientSecret"
-              type="password"
-              autocomplete="new-password"
-              spellcheck="false"
-            />
-            <span id="client-secret-locked" class="locked" hidden>set by config</span>
-          </div>
-          <div class="actions">
-            <button id="save-cred" type="submit">Save</button>
-          </div>
-          <p id="cred-msg" class="msg" hidden></p>
-        </form>
-      </section>
+            <div class="cols">
+              <ol class="howto">
+                <li>
+                  <p>
+                    Sign in at
+                    <a href="https://developer.goto.com" target="_blank" rel="noopener noreferrer"
+                      >developer.goto.com</a
+                    >, open <strong>OAuth Clients</strong> and create a new client.
+                  </p>
+                </li>
+                <li id="redirect-item">
+                  <p>Add this redirect URI to the client:</p>
+                  <div class="copy-field">
+                    <code id="redirect-uri" class="wrap"></code>
+                    <button id="copy-redirect" type="button" class="ghost small">Copy</button>
+                  </div>
+                  <p id="no-redirect" class="alert warn" hidden>
+                    This app has no public URL yet, so there is no redirect URI. Set
+                    <code>publicUrl</code> (or <code>GOTO_SMS_PUBLIC_URL</code>) and restart the
+                    app.
+                  </p>
+                </li>
+                <li id="scopes-item">
+                  <p>Turn on these scopes:</p>
+                  <ul id="scopes" class="scopes"></ul>
+                  <button id="copy-scopes" type="button" class="ghost small">
+                    Copy all scopes
+                  </button>
+                </li>
+                <li>
+                  <p>
+                    Save the client. <strong>GoTo shows the client secret only once</strong>, so
+                    copy it before you leave that page.
+                  </p>
+                </li>
+              </ol>
 
-      <section class="card" aria-labelledby="h-connect">
-        <h2 id="h-connect">2. Connect</h2>
-        <p class="muted">
-          Sign in to GoTo with the account that owns the numbers you want to text from. You come
-          back here afterwards.
-        </p>
-        <div class="actions">
-          <button id="connect" type="button">Connect to GoTo</button>
-          <button id="disconnect" type="button" class="secondary" hidden>Disconnect</button>
+              <form id="cred-form" class="form paste" novalidate>
+                <h3>Paste from GoTo</h3>
+                <p id="cred-problem" class="alert bad" hidden></p>
+                <div class="field">
+                  <label for="client-id">Client ID</label>
+                  <input id="client-id" name="clientId" autocomplete="off" spellcheck="false" />
+                  <p id="client-id-locked" class="locked" hidden>✓ set by your app's config</p>
+                </div>
+                <div class="field">
+                  <label for="client-secret">Client secret</label>
+                  <input
+                    id="client-secret"
+                    name="clientSecret"
+                    type="password"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                  />
+                  <p id="client-secret-locked" class="locked" hidden>✓ set by your app's config</p>
+                </div>
+                <div class="actions">
+                  <button id="save-cred" type="submit" class="primary">Save and continue</button>
+                </div>
+                <p id="cred-msg" class="msg" hidden></p>
+              </form>
+            </div>
+          </section>
+
+          <!-- 2. Sign in -->
+          <section class="step" id="step-2" aria-labelledby="h-2" hidden>
+            <h2 id="h-2" tabindex="-1">Sign in to GoTo</h2>
+            <p class="intro">
+              Sign in with the GoTo account that owns the phone numbers you want to text from. If
+              you want replies delivered by webhook later, that account must be a Super Admin.
+            </p>
+            <p id="login-problem" class="alert bad" hidden></p>
+            <div id="goto-login-error" class="alert bad" hidden>
+              <p>
+                <strong>GoTo couldn't sign you in.</strong> This almost always means one of two
+                things:
+              </p>
+              <ul>
+                <li>the redirect URI isn't registered on your GoTo client exactly as shown, or</li>
+                <li>one of the required scopes isn't turned on for the client.</li>
+              </ul>
+              <button id="to-step-1" type="button" class="linkish">
+                Check the redirect URI and scopes in step 1
+              </button>
+            </div>
+            <p id="connected-note" class="alert ok" hidden>✓ Connected to GoTo.</p>
+            <div class="actions">
+              <button id="connect" type="button" class="primary">Connect to GoTo</button>
+              <button id="disconnect" type="button" class="ghost" hidden>Disconnect</button>
+            </div>
+            <p id="connect-msg" class="msg" hidden></p>
+            <p id="connect-fine" class="fine">
+              You'll leave this page to sign in, then come straight back.
+            </p>
+          </section>
+
+          <!-- 3. Sending number -->
+          <section class="step" id="step-3" aria-labelledby="h-3" hidden>
+            <h2 id="h-3" tabindex="-1">Choose the sending number</h2>
+            <p class="intro">Texts from this app come from the number you pick here.</p>
+            <form id="number-form" class="form narrow" novalidate>
+              <p id="number-loading" class="muted" hidden>Loading your GoTo numbers…</p>
+              <div class="field" id="account-field">
+                <label for="account">GoTo account</label>
+                <select id="account" name="accountKey"></select>
+                <p id="account-locked" class="locked" hidden>✓ set by your app's config</p>
+              </div>
+              <div class="field" id="number-field">
+                <label for="number">Phone number</label>
+                <select id="number" name="fromNumber"></select>
+              </div>
+              <div class="field" id="typed-field" hidden>
+                <label for="typed-number">Phone number</label>
+                <input
+                  id="typed-number"
+                  type="tel"
+                  autocomplete="off"
+                  placeholder="+1 801 555 0100"
+                />
+                <p class="hint">GoTo didn't list the numbers, so type the one to send from.</p>
+              </div>
+              <p id="number-locked" class="locked" hidden>✓ Number set by your app's config</p>
+              <p id="sms-hint" class="hint" hidden></p>
+              <p id="number-problem" class="alert bad" hidden>
+                The sending number in your app's config isn't a valid phone number. Fix it there and
+                restart the app.
+              </p>
+              <div class="actions">
+                <button id="save-number" type="submit" class="primary">Save and continue</button>
+              </div>
+              <p id="number-msg" class="msg" hidden></p>
+            </form>
+          </section>
+
+          <!-- 4. Test -->
+          <section class="step" id="step-4" aria-labelledby="h-4" hidden>
+            <h2 id="h-4" tabindex="-1">Send a test text</h2>
+            <p class="intro">
+              A real text is the only sure check that this number can send. It says “Test message
+              from goto-sms”.
+            </p>
+            <form id="test-form" class="form narrow" novalidate>
+              <div class="field">
+                <label for="test-to">Your mobile number</label>
+                <input id="test-to" type="tel" autocomplete="tel" placeholder="(801) 555-0100" />
+              </div>
+              <div class="actions">
+                <button id="send-test" type="submit" class="primary">Send test text</button>
+              </div>
+              <p id="test-msg" class="msg" hidden></p>
+            </form>
+            <div class="actions after">
+              <button id="test-continue" type="button" class="primary" hidden>Continue</button>
+              <button id="test-skip" type="button" class="linkish">Skip for now</button>
+            </div>
+          </section>
+
+          <!-- 5. Incoming -->
+          <section class="step" id="step-5" aria-labelledby="h-5" hidden>
+            <h2 id="h-5" tabindex="-1">Incoming texts</h2>
+            <p class="intro">
+              Optional. Choose how replies reach this app. STOP, START and HELP replies are handled
+              for you whenever replies are on.
+            </p>
+            <fieldset class="choices">
+              <legend class="sr-only">How replies reach this app</legend>
+              <label class="choice">
+                <input type="radio" name="incoming" value="off" />
+                <span class="choice-body">
+                  <span class="choice-title">Off</span>
+                  <span class="choice-text">Send only. Replies stay in GoTo.</span>
+                </span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="incoming" value="polling" />
+                <span class="choice-body">
+                  <span class="choice-title">Polling</span>
+                  <span class="choice-text"
+                    >Checks GoTo for new texts every 30 seconds. Works anywhere, even on your own
+                    computer, but replies can take up to half a minute.</span
+                  >
+                </span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="incoming" value="webhook" />
+                <span class="choice-body">
+                  <span class="choice-title">Webhook</span>
+                  <span class="choice-text"
+                    >GoTo delivers each text the moment it arrives. Needs a public https address and
+                    a Super Admin GoTo login.</span
+                  >
+                  <span id="webhook-reason" class="choice-reason" hidden
+                    >Not available: this app's public URL isn't https.</span
+                  >
+                </span>
+              </label>
+            </fieldset>
+            <p id="webhook-url-row" class="fine" hidden>
+              GoTo delivers to <code id="webhook-url" class="wrap"></code>
+            </p>
+            <p id="incoming-error" class="alert bad" hidden></p>
+            <div class="actions">
+              <button id="finish" type="button" class="primary">Finish</button>
+            </div>
+            <p id="incoming-msg" class="msg" hidden></p>
+          </section>
         </div>
-        <p id="connect-msg" class="msg" hidden></p>
-      </section>
+      </div>
 
-      <section class="card" aria-labelledby="h-number">
-        <h2 id="h-number">3. Sending number</h2>
-        <form id="number-form" class="form">
-          <div class="field" id="account-field">
-            <label for="account">GoTo account</label>
-            <select id="account" name="accountKey"></select>
-            <span id="account-locked" class="locked" hidden>set by config</span>
-          </div>
-          <div class="field" id="number-field">
-            <label for="number">Number</label>
-            <select id="number" name="fromNumber"></select>
-          </div>
-          <div class="field" id="typed-field" hidden>
-            <label for="typed-number">Number (type it in)</label>
-            <input id="typed-number" type="tel" autocomplete="off" placeholder="+1 801 555 0100" />
-          </div>
-          <span id="number-locked" class="locked" hidden>set by config</span>
-          <p id="sms-hint" class="muted" hidden></p>
-          <div class="actions">
-            <button id="load-numbers" type="button" class="secondary">Load numbers</button>
-            <button id="save-number" type="submit">Save</button>
-          </div>
-          <p id="number-msg" class="msg" hidden></p>
-        </form>
-      </section>
+      <!-- Manage mode: everything works. -->
+      <div id="manage" class="manage" hidden>
+        <div class="manage-top">
+          <section class="summary" aria-labelledby="ready-title">
+            <h2 id="ready-title" tabindex="-1">
+              <span class="tick" aria-hidden="true">✓</span> Ready
+            </h2>
+            <p id="ready-line" class="ready-line"></p>
+            <dl id="summary-rows" class="rows"></dl>
+          </section>
+          <section class="quick" aria-labelledby="h-quick">
+            <h2 id="h-quick">Send a test text</h2>
+            <form id="m-test-form" class="form" novalidate>
+              <div class="field">
+                <label for="m-test-to">Mobile number</label>
+                <input id="m-test-to" type="tel" autocomplete="tel" placeholder="(801) 555-0100" />
+              </div>
+              <div class="actions">
+                <button id="m-send-test" type="submit" class="ghost">Send test text</button>
+              </div>
+              <p id="m-test-msg" class="msg" hidden></p>
+            </form>
+          </section>
+        </div>
 
-      <section class="card" aria-labelledby="h-test">
-        <h2 id="h-test">4. Test</h2>
-        <form id="test-form" class="form">
-          <div class="field">
-            <label for="test-to">Send a test text to</label>
-            <input id="test-to" type="tel" autocomplete="tel" placeholder="(801) 555-0100" />
-          </div>
-          <div class="actions">
-            <button id="send-test" type="submit">Send test text</button>
-          </div>
-          <p id="test-msg" class="msg" hidden></p>
-        </form>
-      </section>
-
-      <section class="card" aria-labelledby="h-incoming">
-        <h2 id="h-incoming">5. Incoming texts</h2>
-        <fieldset class="radios">
-          <legend>How replies reach this app</legend>
-          <label
-            ><input type="radio" name="incoming" value="webhook" /> Webhook
-            <span class="muted">(instant)</span></label
-          >
-          <label
-            ><input type="radio" name="incoming" value="polling" /> Polling
-            <span class="muted">(checks every 30 s)</span></label
-          >
-          <label><input type="radio" name="incoming" value="off" /> Off</label>
-        </fieldset>
-        <p class="note">
-          Webhooks need an https public URL, and the GoTo login you connected with must be a Super
-          Admin to create the subscription. Otherwise use Polling.
-        </p>
-        <p id="webhook-url-row" hidden>
-          GoTo delivers to <code id="webhook-url" class="wrap"></code>
-        </p>
-        <p id="incoming-error" class="warn" hidden></p>
-        <button id="incoming-retry" type="button" class="secondary" hidden>
-          Retry webhook setup
-        </button>
-        <p id="incoming-msg" class="msg" hidden></p>
-      </section>
-
-      <section class="card span" aria-labelledby="h-activity">
-        <h2 id="h-activity">6. Activity</h2>
-        <div class="split">
-          <div>
+        <div class="lists">
+          <section class="list" aria-labelledby="h-activity">
             <div class="row-head">
-              <h3>Recent messages</h3>
-              <button id="refresh-log" type="button" class="secondary">Refresh</button>
+              <h2 id="h-activity">Recent activity</h2>
+              <button id="refresh-log" type="button" class="ghost small">Refresh</button>
             </div>
             <table class="stack">
               <caption class="sr-only">
@@ -186,9 +308,11 @@
               <tbody id="log-body"></tbody>
             </table>
             <p id="log-empty" class="muted">No messages yet.</p>
-          </div>
-          <div>
-            <h3>Opted out</h3>
+          </section>
+
+          <section class="list" aria-labelledby="h-optouts">
+            <h2 id="h-optouts">Opted out</h2>
+            <p class="fine">These numbers won't be texted.</p>
             <table class="stack">
               <caption class="sr-only">
                 Numbers that won't be texted
@@ -204,19 +328,19 @@
               <tbody id="optout-body"></tbody>
             </table>
             <p id="optout-empty" class="muted">No opt-outs.</p>
-            <form id="optout-form" class="form inline">
+            <form id="optout-form" class="form inline" novalidate>
               <div class="field">
                 <label for="optout-number">Add a number</label>
                 <input id="optout-number" type="tel" autocomplete="off" />
               </div>
               <div class="actions">
-                <button type="submit" class="secondary">Add opt-out</button>
+                <button type="submit" class="ghost">Add opt-out</button>
               </div>
             </form>
             <p id="optout-msg" class="msg" hidden></p>
-          </div>
+          </section>
         </div>
-      </section>
+      </div>
     </main>
 
     <footer class="foot">

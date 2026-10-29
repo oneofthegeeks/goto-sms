@@ -26,6 +26,8 @@ const isAdmin = (req) => {
 
 const sms = createGoToSms({
   authorize: isAdmin,
+  // The setup page shows "← Back to the app" linking here.
+  backUrl: '/',
   publicUrl: process.env.GOTO_SMS_PUBLIC_URL,
   dataDir: process.env.GOTO_SMS_DATA_DIR ?? './data',
   // Overridden only by the e2e test, which points both at a fake GoTo.
@@ -36,6 +38,12 @@ sms.on('message', (m) => console.log('inbound text', m));
 
 const app = express();
 app.use(express.json());
+
+app.get('/', (_req, res) => {
+  res
+    .type('html')
+    .send('<p>goto-sms example app. <a href="/goto-sms/">Open the SMS setup page</a>.</p>');
+});
 
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true, version: VERSION });

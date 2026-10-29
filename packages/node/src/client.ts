@@ -4,8 +4,14 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Router } from 'express';
 import { join } from 'node:path';
-import { ConfigResolver } from './config.js';
-import { GoToSmsError, NotConfiguredError, SendFailedError } from './errors.js';
+import { ConfigResolver, configValue } from './config.js';
+import {
+  GoToApiError,
+  GoToSmsError,
+  NotConfiguredError,
+  SendFailedError,
+  TemporaryError,
+} from './errors.js';
 import { createGoToHttp, errorName, type GoToHttp } from './http.js';
 import { DEFAULT_REPLIES, type KeywordReplies } from './inbound/keywords.js';
 import { Poller } from './inbound/poller.js';
@@ -34,6 +40,14 @@ const ONE_PROCESS =
 
 export type IncomingMode = 'webhook' | 'polling' | 'off';
 
+/**
+ * What `authorize` receives: the host framework's request (Express passes its own, with
+ * `req.cookies`, `req.user` and so on), typed loosely so hosts can read those without a cast.
+ */
+// oxlint-disable-next-line typescript/no-explicit-any -- framework fields are the host's business
+export type AuthorizeRequest = IncomingMessage & Record<string, any>;
+export type Authorize = (req: AuthorizeRequest) => boolean | Promise<boolean>;
+
 export interface GoToSmsOptions {
   publicUrl?: string;
   /** Where the host mounts router(); default '/goto-sms'. */
@@ -41,8 +55,14 @@ export interface GoToSmsOptions {
   dataDir?: string;
   store?: GoToSmsStore;
   tenant?: string;
-  authorize?: (req: IncomingMessage) => boolean | Promise<boolean>;
+  authorize?: Authorize;
   allowUnauthenticatedSetup?: boolean;
+  /** Where the setup page's "← Back to …" link goes: an http(s) URL or a relative path. */
+  backUrl?: string;
+  /** The link's name, as in "Back to Spring Ideas"; default 'the app'. Ignored without backUrl. */
+  backLabel?: string;
+  /** Where an unauthorized page load is redirected (302) instead of a 403; same rules as backUrl. */
+  loginUrl?: string;
   clientId?: string;
   clientSecret?: string;
   accountKey?: string;
@@ -73,8 +93,11 @@ export interface ResolvedOptions {
   /** publicUrl + mountPath + '/callback', or undefined without a publicUrl. */
   redirectUri?: string;
   dataDir?: string;
-  authorize?: (req: IncomingMessage) => boolean | Promise<boolean>;
+  authorize?: Authorize;
   allowUnauthenticatedSetup: boolean;
+  /** The setup page's back link, when backUrl is set. */
+  back?: { url: string; label: string };
+  loginUrl?: string;
   logOnly: boolean;
   replies: KeywordReplies;
   yesIsOptIn: boolean;
@@ -128,6 +151,13 @@ export interface GoToSms {
    */
   status(): Promise<StatusPayload>;
   /**
+   * Checks the GoTo login now by getting a new access token (exchanging a GOTO_REFRESH_TOKEN
+   * seed, or refreshing), then returns `status().connected`. Never throws for login or
+   * configuration problems: it returns false and `status()` says why. For migrating a seed at
+   * startup or a deeper health check; each call makes one GoTo token request.
+   */
+  verifyConnection(): Promise<boolean>;
+  /**
    * The setup page, its JSON API, the OAuth callback and the webhook, for
    * `app.use(mountPath, sms.router())`. Throws without `authorize` (see contract/http.md).
    * Usable before `ready`; if startup fails the page still loads and shows why.
@@ -138,7 +168,7 @@ export interface GoToSms {
   /** Resolves after key resolution, the process lock, replayPending and poller start. */
   ready: Promise<void>;
   close(): Promise<void>;
-  /** @internal for handlers; throws until `ready` resolves. */
+  /** Internal, for the package's own handlers; may change in any release. Throws until `ready`. */
   readonly core: Core;
 }
 
@@ -172,14 +202,48 @@ function normalizeMount(p: string): string {
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
 
+/**
+ * A link option the page renders as an href (backUrl) or the server redirects to (loginUrl):
+ * only an absolute http(s) URL or a same-origin relative path. Rejects `javascript:`, `data:`
+ * and the like, protocol-relative `//host` (or `/\host`) and scheme-relative `http:host`,
+ * which leave the site, and the literal `back` (Express 4 redirects it to the Referer).
+ */
+function linkOption(name: string, raw: string | undefined): string | undefined {
+  const v = configValue(raw);
+  if (v === undefined) return undefined;
+  const base = 'http://relative.invalid';
+  let url: URL | undefined;
+  try {
+    url = new URL(v, base);
+  } catch {
+    url = undefined;
+  }
+  // Whitespace or control characters can hide a scheme from a human reader; never needed.
+  // eslint-disable-next-line no-control-regex
+  const plain = !/[\s\x00-\x1f\x7f]/.test(v);
+  // A relative value has no scheme: `http:evil.com` is relative to an http: parser base but
+  // absolute (http://evil.com/) on an https page.
+  const relative = url?.origin === base && !/^[a-z][a-z\d+.-]*:/i.test(v);
+  const absolute =
+    /^https?:\/\//i.test(v) && (url?.protocol === 'http:' || url?.protocol === 'https:');
+  // Express 4's res.redirect('back') means "to the Referer", an open redirect for loginUrl.
+  const magic = v.toLowerCase() === 'back';
+  if (!plain || magic || !url || !(relative || absolute)) {
+    throw new Error(`goto-sms: ${name} must be an http(s) URL or a relative path`);
+  }
+  return v;
+}
+
 export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
   const env = o.env ?? process.env;
   const now = o.now ?? Date.now;
   const logger = o.logger === false ? silentLogger : (o.logger ?? consoleLogger());
   const tenant = o.tenant ?? 'default';
-  const publicUrlRaw = o.publicUrl ?? env.GOTO_SMS_PUBLIC_URL;
+  const publicUrlRaw = configValue(o.publicUrl) ?? configValue(env.GOTO_SMS_PUBLIC_URL);
   const publicUrl = publicUrlRaw ? publicUrlRaw.replace(/\/+$/, '') : undefined;
   const mountPath = o.mountPath === undefined ? '/goto-sms' : normalizeMount(o.mountPath);
+  const backUrl = linkOption('backUrl', o.backUrl);
+  const loginUrl = linkOption('loginUrl', o.loginUrl);
   // A custom store and no dataDir means there is nowhere for a keyfile: the key must then
   // come from the option or env (resolveEncryptionKey throws NotConfiguredError).
   const dataDir = o.dataDir ?? (o.store ? undefined : './data');
@@ -189,6 +253,8 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
     ...(dataDir !== undefined ? { dataDir } : {}),
     ...(o.authorize ? { authorize: o.authorize } : {}),
     allowUnauthenticatedSetup: o.allowUnauthenticatedSetup ?? false,
+    ...(backUrl ? { back: { url: backUrl, label: configValue(o.backLabel) ?? 'the app' } } : {}),
+    ...(loginUrl ? { loginUrl } : {}),
     logOnly: o.logOnly ?? false,
     replies: { ...DEFAULT_REPLIES, ...o.replies },
     yesIsOptIn: o.yesIsOptIn ?? true,
@@ -448,6 +514,26 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
         return buildStatus(options, undefined, startupErrorText(err));
       }
       return buildStatus(options, c);
+    },
+    async verifyConnection() {
+      let c: Core;
+      try {
+        c = await coreReady;
+      } catch (err) {
+        if (err instanceof NotConfiguredError) return false;
+        throw err;
+      }
+      try {
+        await c.auth.verify();
+      } catch (err) {
+        // Login, configuration and GoTo errors all land in status(); anything else is a bug.
+        if (!(err instanceof GoToSmsError)) throw err;
+        c.logger.debug('goto-sms: verifyConnection failed', { error: err.code });
+        // GoTo unreachable or erroring: the stored login may be fine, but it wasn't verified,
+        // so a health check must not report it as working.
+        if (err instanceof TemporaryError || err instanceof GoToApiError) return false;
+      }
+      return (await buildStatus(options, c)).connected;
     },
     router() {
       assertSetupAuth(options);

@@ -34,7 +34,12 @@ implements exactly this. The Node reference is `packages/node/src/server/handler
 | every other non-`GET`      | required         | required          | host's `authorize`     |
 
 - `authorize(req)` is a required option. It receives the host framework's raw request and returns
-  (or resolves to) a boolean. `false` gives `403 {"error":"forbidden"}`.
+  (or resolves to) a boolean. `false` gives `403 {"error":"forbidden"}`, except for `GET /` (the
+  page) when the host set `loginUrl`: that request gets a `302` to `loginUrl` instead, so a person
+  lands on the host's login. API routes always get the JSON `403`.
+- `loginUrl` and `backUrl` accept only an absolute `http(s)` URL or a same-origin relative path.
+  Anything else (`javascript:`, `data:`, protocol-relative `//host`, scheme-relative
+  `http:host`, the literal `back`, values with whitespace) is refused when the package is created.
 - Creating the handlers/router **throws** when no `authorize` is given, with this exact message:
   `goto-sms: pass authorize(req) to createGoToSms (or allowUnauthenticatedSetup: true in development)`.
   `allowUnauthenticatedSetup: true` skips `authorize`, but it also throws when
@@ -121,7 +126,8 @@ Returned by `GET /api/status` and by every state-changing route marked "returns 
     "messaging.v1.notifications.manage",
     "voice-admin.v1.read",
   ],
-  "startupError": "…", // optional: only when startup failed; a fixed, secret-free reason
+  "back": { "url": "/admin", "label": "Spring Ideas" }, // optional: only when the host set backUrl; label defaults to "the app"
+  "startupError": "…", // optional: only when startup failed; a fixed, secret-free reason in plain words
 }
 ```
 
@@ -130,7 +136,8 @@ subscription failed (see `POST /api/selection`): texts to the selected account a
 carries the error code, its message and GoTo's HTTP status, never GoTo's body. It is cleared by the
 next successful `POST /api/incoming` (any mode) or a successful move.
 
-If the package could not start (for example no encryption key), the status still answers, with
+The page renders `back` as a "← Back to <label>" link. If the package could not start (for
+example no encryption key), the status still answers, with `back` as usual,
 `configured`, `connected` and `ready` false, every source `"unset"`, and `startupError` saying why
 (the package's own message, or only the error's name for anything else).
 
@@ -154,7 +161,7 @@ A package exposes two mountable routers:
 
 ### `GET /`
 
-- Auth: `authorize`.
+- Auth: `authorize`. Refused: `302` to `loginUrl` when the host set one, else `403`.
 - Response: `200`, the setup page HTML.
 
 ### `GET /api/status`

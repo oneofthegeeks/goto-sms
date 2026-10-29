@@ -189,6 +189,19 @@ export class GoToAuth {
     return this.exclusive(() => this.refreshFlight(false));
   }
 
+  /**
+   * Get a new access token from GoTo now: exchange a pending GOTO_REFRESH_TOKEN seed, else
+   * refresh even if the current access token is fresh. For sms.verifyConnection().
+   */
+  async verify(): Promise<void> {
+    const tokens = await this.readTokens();
+    const seed = this.config.seedRefreshToken();
+    const seedPending =
+      seed !== undefined && tokens?.seedHash !== undefined && tokens.seedHash !== sha256hex(seed);
+    if (!tokens || seedPending) await this.getAccessToken();
+    else await this.forceRefresh();
+  }
+
   /** Refresh now even if the access token looks fresh (GoTo answered 401). */
   async forceRefresh(): Promise<string> {
     await this.credentials();

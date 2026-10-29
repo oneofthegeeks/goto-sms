@@ -308,6 +308,10 @@ function dispatcher(options: ResolvedOptions, logger: Logger, t: RouteTable): Ha
       if (route === 'GET /callback') return await t.callback(req.query);
 
       if (authorize && !(await authorize(req.raw))) {
+        // A person opening the page goes to the host's login; API callers get the JSON 403.
+        if (route === 'GET /' && options.loginUrl) {
+          return { status: 302, redirect: options.loginUrl };
+        }
         return { status: 403, json: { error: 'forbidden', message: 'Not allowed' } };
       }
       if (method !== 'GET' && !sameOrigin(req, options.publicUrl)) {
