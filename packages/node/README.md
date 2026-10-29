@@ -7,7 +7,7 @@ secret into a built-in setup page, click Connect, pick an account and a sending 
 The package handles GoTo's OAuth quirks, token refresh, number cleanup, STOP/START/HELP and
 inbound texts.
 
-Requires Node 20 or newer. Express 4 or 5 is a peer dependency (only for `router()`); the core has
+Requires Node 22 or newer (Node 20 is end-of-life; stay on 0.1.x for Node 20). Express 4 or 5 is a peer dependency (only for `router()`); the core has
 no runtime dependencies and no native modules. The type declarations reference `express` and
 `better-sqlite3` types, so TypeScript projects without `skipLibCheck` also need `@types/express` and
 `@types/better-sqlite3` installed.
@@ -203,7 +203,7 @@ A `dedupeKey` that already produced `sent` or `uncertain` returns the earlier re
 - **File store (default):** a JSON file at `<dataDir>/goto-sms.json`, written atomically. Pure JS,
   no native modules.
 - **SQLite:** for apps already using `better-sqlite3` 11, 12 or 13 (optional peer dependency,
-  WAL). Versions 11 and 12 run on Node 20 or newer; 13 needs Node 22 or newer. You need
+  WAL). You need
   `@types/better-sqlite3` installed for the `SqliteStore` types.
 
   ```js

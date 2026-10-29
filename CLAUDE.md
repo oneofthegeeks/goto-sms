@@ -8,7 +8,7 @@ Live: v0.1.1 (2026-10-28) — webhook answers GoTo's OPTIONS check; first releas
 
 ## Stack
 
-TypeScript (strict, NodeNext), tsup (ESM+CJS+dts), tsx for tests, oxlint (type-aware) + prettier. npm workspaces: `setup-ui` (plain-TS setup page, esbuild-inlined to one HTML file) and `packages/node`. express is a peer dep (loaded lazily).
+Node >= 22 (`engines`; CI matrix 22/24). TypeScript (strict, NodeNext), tsup (ESM+CJS+dts), tsx for tests, oxlint (type-aware) + prettier. npm workspaces: `setup-ui` (plain-TS setup page, esbuild-inlined to one HTML file) and `packages/node`. express is a peer dep (loaded lazily).
 
 ## Local Development
 
@@ -27,7 +27,7 @@ npm run typecheck && npm run lint && npm test && npm run build
 
 Library, no Docker/Poppy. Release: bump `packages/node/package.json` version + a `CHANGELOG.md` row (via PR), then push tag `vX.Y.Z` -> publish.yml waits for Taylor's approval (GitHub environment `npm`) -> npm via trusted publishing (OIDC, provenance) + GitHub release with the setup-ui zip. publish.yml fails if the tag != package version and skips npm if that version already exists.
 
-- `main` ruleset: changes only by PR with green `ci (20/22/24)` + `e2e`; no force-push/deletion; 0 approvals (solo). Direct pushes to main are rejected — branch first.
+- `main` ruleset: changes only by PR with green `ci (22/24)` + `e2e` (0.2.0 dropped Node 20: the ruleset's `ci (20)` check must be removed before that PR can merge); no force-push/deletion; 0 approvals (solo). Direct pushes to main are rejected — branch first.
 - `v*` tags are immutable (no move/delete, no bypass) — a wrong tag means a new version, not a re-tag.
 - Manual npm publish (only needed if trusted publishing breaks) uses passkey web-auth: run it in a real terminal pane, not Claude's `!` (no TTY).
 
