@@ -38,8 +38,8 @@ implements exactly this. The Node reference is `packages/node/src/server/handler
   page) when the host set `loginUrl`: that request gets a `302` to `loginUrl` instead, so a person
   lands on the host's login. API routes always get the JSON `403`.
 - `loginUrl` and `backUrl` accept only an absolute `http(s)` URL or a same-origin relative path.
-  Anything else (`javascript:`, `data:`, protocol-relative `//host`, values with whitespace) is
-  refused when the package is created.
+  Anything else (`javascript:`, `data:`, protocol-relative `//host`, scheme-relative
+  `http:host`, the literal `back`, values with whitespace) is refused when the package is created.
 - Creating the handlers/router **throws** when no `authorize` is given, with this exact message:
   `goto-sms: pass authorize(req) to createGoToSms (or allowUnauthenticatedSetup: true in development)`.
   `allowUnauthenticatedSetup: true` skips `authorize`, but it also throws when

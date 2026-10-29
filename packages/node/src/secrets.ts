@@ -56,6 +56,17 @@ export async function resolveEncryptionKey(o: {
   dataDir?: string;
   logger: Logger;
 }): Promise<{ key: Buffer; source: 'option' | 'env' | 'keyfile' }> {
+  // 0.1.x hashed a CHANGEME or blank key as a real key; say so when one is now ignored, since
+  // secrets saved under it become unreadable. The value itself is never logged.
+  const placeholder = (raw: string | undefined, name: string): void => {
+    if (raw !== undefined && raw !== '' && configValue(raw) === undefined) {
+      o.logger.warn(
+        `${name} is a placeholder (blank or CHANGEME) and is ignored; secrets saved under it in goto-sms 0.1.x must be re-entered`,
+      );
+    }
+  };
+  placeholder(o.optionKey, 'The encryptionKey option');
+  placeholder(o.env.GOTO_SMS_ENCRYPTION_KEY, 'GOTO_SMS_ENCRYPTION_KEY');
   const optionKey = configValue(o.optionKey);
   if (optionKey) return { key: sha256(optionKey), source: 'option' };
   const envKey = configValue(o.env.GOTO_SMS_ENCRYPTION_KEY);

@@ -706,6 +706,13 @@ test('backUrl and loginUrl must be http(s) or a relative path; anything else thr
     '//evil.example',
     '/\\evil.example',
     'https:evil.example',
+    // Same scheme as a parser base, so "relative" to it, but absolute in a browser.
+    'http:evil.example',
+    'HTTP:/evil.example',
+    'http:\\evil.example',
+    // Express 4's res.redirect('back') redirects to the Referer.
+    'back',
+    'BACK',
   ];
   for (const url of bad) {
     assert.throws(

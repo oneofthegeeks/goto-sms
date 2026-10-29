@@ -52,8 +52,10 @@ URL contains the webhook secret. It reads stored state only and makes no GoTo ca
 
 `await sms.verifyConnection()` checks the GoTo login for real: it gets a new access token now
 (exchanging a `GOTO_REFRESH_TOKEN` seed if one is waiting, otherwise refreshing), then returns
-`status().connected`. It never throws for login or configuration problems; it returns `false` and
-`status()` says why (for example `loginExpired`). Use it to move a seeded login over at startup or
+`status().connected`. It never throws for login, configuration or GoTo problems; it returns `false`
+and, for a refused login, `status()` says why (for example `loginExpired`). It also returns `false`
+when GoTo or the network is down, because the login couldn't be checked; the stored login is kept
+and `status().connected` may still be `true`. Use it to move a seeded login over at startup or
 for a deeper health check. Each call makes one GoTo token request, so don't poll it every few
 seconds.
 
@@ -77,7 +79,8 @@ const sms = createGoToSms({
 - `loginUrl`: when `authorize` says no, a browser opening the page is redirected (302) here
   instead of getting a bare 403. The page's API routes still answer 403 JSON.
 - `backUrl` and `loginUrl` must be an `http(s)` URL or a relative path (`/admin`, `../app`).
-  `createGoToSms` throws for anything else, such as `javascript:`, `data:` or `//other-host`.
+  `createGoToSms` throws for anything else, such as `javascript:`, `data:`, `//other-host`,
+  `http:other-host` or the literal `back`.
 
 ## Create the GoTo OAuth client
 
@@ -114,7 +117,11 @@ Each setting can come from three places. Highest precedence first:
 | Public base URL           | `publicUrl`     | `GOTO_SMS_PUBLIC_URL`     |
 
 Blank values and the literal placeholder `CHANGEME` (any case) count as unset, in options and env
-alike, so a secret manager's unfilled key never becomes a locked client ID or the encryption key. Values from options or env show on the setup page as locked
+alike, so a secret manager's unfilled key never becomes a locked client ID or the encryption key.
+
+**Upgrading from 0.1.x:** 0.1.x used a `CHANGEME` (or whitespace-only) `GOTO_SMS_ENCRYPTION_KEY` as
+a real key. From 0.2.0 it is ignored and a warning is logged, so secrets saved under it can't be
+read: set a real key, then paste the client secret again and reconnect on the setup page. Values from options or env show on the setup page as locked
 ("set by config") and are never written to the store.
 
 `GOTO_REFRESH_TOKEN` **seeds, then the store manages it.** GoTo rotates refresh tokens, and an env

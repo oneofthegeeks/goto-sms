@@ -325,3 +325,11 @@ test('verifyConnection returns false (never throws) for login problems', async (
   cleanups.push(() => nokey.close());
   assert.equal(await nokey.verifyConnection(), false);
 });
+
+test('verifyConnection returns false when GoTo cannot be reached (not "connected" in an outage)', async () => {
+  const fake = await fakeGoTo();
+  const sms = await connectedSms(fake);
+  cleanups.push(() => sms.close());
+  await fake.close(); // the token request now fails at the network level
+  assert.equal(await sms.verifyConnection(), false);
+});

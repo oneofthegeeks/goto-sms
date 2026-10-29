@@ -5,7 +5,13 @@ import type { IncomingMessage } from 'node:http';
 import type { Router } from 'express';
 import { join } from 'node:path';
 import { ConfigResolver, configValue } from './config.js';
-import { GoToSmsError, NotConfiguredError, SendFailedError } from './errors.js';
+import {
+  GoToApiError,
+  GoToSmsError,
+  NotConfiguredError,
+  SendFailedError,
+  TemporaryError,
+} from './errors.js';
 import { createGoToHttp, errorName, type GoToHttp } from './http.js';
 import { DEFAULT_REPLIES, type KeywordReplies } from './inbound/keywords.js';
 import { Poller } from './inbound/poller.js';
@@ -199,7 +205,8 @@ function normalizeMount(p: string): string {
 /**
  * A link option the page renders as an href (backUrl) or the server redirects to (loginUrl):
  * only an absolute http(s) URL or a same-origin relative path. Rejects `javascript:`, `data:`
- * and the like, and protocol-relative `//host` (or `/\host`), which leaves the site.
+ * and the like, protocol-relative `//host` (or `/\host`) and scheme-relative `http:host`,
+ * which leave the site, and the literal `back` (Express 4 redirects it to the Referer).
  */
 function linkOption(name: string, raw: string | undefined): string | undefined {
   const v = configValue(raw);
@@ -214,10 +221,14 @@ function linkOption(name: string, raw: string | undefined): string | undefined {
   // Whitespace or control characters can hide a scheme from a human reader; never needed.
   // eslint-disable-next-line no-control-regex
   const plain = !/[\s\x00-\x1f\x7f]/.test(v);
-  const relative = url?.origin === base;
+  // A relative value has no scheme: `http:evil.com` is relative to an http: parser base but
+  // absolute (http://evil.com/) on an https page.
+  const relative = url?.origin === base && !/^[a-z][a-z\d+.-]*:/i.test(v);
   const absolute =
     /^https?:\/\//i.test(v) && (url?.protocol === 'http:' || url?.protocol === 'https:');
-  if (!plain || !url || !(relative || absolute)) {
+  // Express 4's res.redirect('back') means "to the Referer", an open redirect for loginUrl.
+  const magic = v.toLowerCase() === 'back';
+  if (!plain || magic || !url || !(relative || absolute)) {
     throw new Error(`goto-sms: ${name} must be an http(s) URL or a relative path`);
   }
   return v;
@@ -518,6 +529,9 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
         // Login, configuration and GoTo errors all land in status(); anything else is a bug.
         if (!(err instanceof GoToSmsError)) throw err;
         c.logger.debug('goto-sms: verifyConnection failed', { error: err.code });
+        // GoTo unreachable or erroring: the stored login may be fine, but it wasn't verified,
+        // so a health check must not report it as working.
+        if (err instanceof TemporaryError || err instanceof GoToApiError) return false;
       }
       return (await buildStatus(options, c)).connected;
     },

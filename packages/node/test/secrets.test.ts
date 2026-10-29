@@ -156,3 +156,18 @@ test('a real key is hashed untrimmed', async () => {
   const r = await resolveEncryptionKey({ env: { GOTO_SMS_ENCRYPTION_KEY: ' k ' }, logger });
   assert.deepEqual(r.key, createHash('sha256').update(' k ', 'utf8').digest());
 });
+
+test('an ignored placeholder key logs a warning that names no value', async () => {
+  const dataDir = await tmp();
+  warnings.length = 0;
+  await resolveEncryptionKey({ env: { GOTO_SMS_ENCRYPTION_KEY: 'CHANGEME' }, dataDir, logger });
+  const w = warnings.find((m) => m.includes('GOTO_SMS_ENCRYPTION_KEY is a placeholder'));
+  assert.ok(w, warnings.join('\n'));
+  warnings.length = 0;
+  await resolveEncryptionKey({ optionKey: '  ', env: {}, dataDir, logger });
+  assert.ok(warnings.some((m) => m.includes('encryptionKey option is a placeholder')));
+  // Unset (undefined) keys are not placeholders: no such warning.
+  warnings.length = 0;
+  await resolveEncryptionKey({ env: {}, dataDir, logger });
+  assert.ok(!warnings.some((m) => m.includes('placeholder')));
+});
