@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGoToSms } from '../src/client.js';
+import { createGoToSms, trimTrailingSlashes } from '../src/client.js';
 import { NotConfiguredError } from '../src/errors.js';
 import { MemoryStore } from '../src/store/memory.js';
 import type { InboundMessage } from '../src/types.js';
@@ -332,4 +332,16 @@ test('verifyConnection returns false when GoTo cannot be reached (not "connected
   cleanups.push(() => sms.close());
   await fake.close(); // the token request now fails at the network level
   assert.equal(await sms.verifyConnection(), false);
+});
+
+test('trimTrailingSlashes trims like /\\/+$/ and stays linear on long slash runs', () => {
+  assert.equal(trimTrailingSlashes('/goto-sms///'), '/goto-sms');
+  assert.equal(trimTrailingSlashes('https://x.example/'), 'https://x.example');
+  assert.equal(trimTrailingSlashes('/'), '');
+  assert.equal(trimTrailingSlashes('no-slash'), 'no-slash');
+  // The regex this replaced backtracks quadratically on this shape (CodeQL js/polynomial-redos).
+  const nasty = '/'.repeat(200_000) + 'x';
+  const started = performance.now();
+  assert.equal(trimTrailingSlashes(nasty), nasty);
+  assert.ok(performance.now() - started < 100, 'linear time');
 });
