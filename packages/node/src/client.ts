@@ -195,9 +195,19 @@ function consoleLogger(): Logger {
 const isThenable = (v: unknown): v is PromiseLike<unknown> =>
   typeof v === 'object' && v !== null && typeof (v as { then?: unknown }).then === 'function';
 
+/**
+ * Drops trailing slashes with a loop: `/\/+$/` backtracks quadratically on long runs of `/`
+ * followed by another character (CodeQL js/polynomial-redos).
+ */
+export function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return s.slice(0, end);
+}
+
 /** '/goto-sms/' → '/goto-sms', 'sms' → '/sms'; '/' and '' → '' (the root mount). */
 function normalizeMount(p: string): string {
-  const trimmed = p.replace(/\/+$/, '');
+  const trimmed = trimTrailingSlashes(p);
   if (trimmed === '') return '';
   return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
 }
@@ -240,7 +250,7 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
   const logger = o.logger === false ? silentLogger : (o.logger ?? consoleLogger());
   const tenant = o.tenant ?? 'default';
   const publicUrlRaw = configValue(o.publicUrl) ?? configValue(env.GOTO_SMS_PUBLIC_URL);
-  const publicUrl = publicUrlRaw ? publicUrlRaw.replace(/\/+$/, '') : undefined;
+  const publicUrl = publicUrlRaw ? trimTrailingSlashes(publicUrlRaw) : undefined;
   const mountPath = o.mountPath === undefined ? '/goto-sms' : normalizeMount(o.mountPath);
   const backUrl = linkOption('backUrl', o.backUrl);
   const loginUrl = linkOption('loginUrl', o.loginUrl);
