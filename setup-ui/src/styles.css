@@ -611,7 +611,7 @@ button:disabled {
 }
 .row {
   display: grid;
-  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
   gap: 1rem;
   padding: 0.8rem 0;
   border-top: 1px solid var(--line);
@@ -623,6 +623,18 @@ button:disabled {
 }
 .row dd {
   margin: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  min-width: 0;
+}
+.row dd > span {
+  min-width: 0;
+}
+.row .change {
+  flex: none;
+  white-space: nowrap;
 }
 .quick {
   display: grid;
@@ -734,16 +746,8 @@ th {
     padding: 1.1rem;
   }
   .row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.15rem 1rem;
-  }
-  .row dd {
-    grid-column: 1;
-    grid-row: 2;
-  }
-  .row .change {
-    grid-row: 1 / span 2;
-    align-self: center;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.15rem;
   }
   /* Each table row becomes a labelled card instead of a scroll box. */
   table.stack thead {

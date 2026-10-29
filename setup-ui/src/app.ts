@@ -238,6 +238,8 @@ function done(s: Status, n: StepNo): boolean {
     case 3:
       return s.ready;
     case 4:
+      // A heuristic: any successful send in the newest 50 log rows (loadLog) counts as the test.
+      // An app that rarely sends may show this step again in a new browser; Skip is remembered.
       return lastSent !== undefined || skippedNow || skipped();
     case 5:
       return incomingDone || s.incoming.mode !== 'off';
@@ -456,10 +458,7 @@ function renderStep4(s: Status): void {
 }
 
 function renderStep5(s: Status): void {
-  const radios = document.querySelectorAll<HTMLInputElement>('input[name="incoming"]');
-  const anyChecked = Array.from(radios).some((r) => r.checked);
-  for (const r of radios) {
-    if (!anyChecked) r.checked = r.value === s.incoming.mode;
+  for (const r of incomingRadios()) {
     if (r.value === 'webhook') r.disabled = !s.incoming.canWebhook;
   }
   $('webhook-reason').hidden = s.incoming.canWebhook;
@@ -499,8 +498,10 @@ function renderManage(s: Status): void {
       row.className = 'row';
       const dt = document.createElement('dt');
       dt.textContent = label;
+      // A div in a dl may hold only dt/dd, so the Change button sits inside the dd.
       const dd = document.createElement('dd');
-      dd.textContent = stepSummary(s, n);
+      const value = document.createElement('span');
+      value.textContent = stepSummary(s, n);
       const change = document.createElement('button');
       change.type = 'button';
       change.className = 'linkish change';
@@ -510,7 +511,8 @@ function renderManage(s: Status): void {
         fromManage = true;
         goTo(n, { focus: true });
       });
-      row.append(dt, dd, change);
+      dd.append(value, change);
+      row.append(dt, dd);
       return row;
     }),
   );
@@ -519,9 +521,15 @@ function renderManage(s: Status): void {
 // --- Navigation -------------------------------------------------------------------------------
 
 /** Opens step n in the stepper. Focus moves to its heading only on a transition. */
+const incomingRadios = () => document.querySelectorAll<HTMLInputElement>('input[name="incoming"]');
+
 function goTo(n: StepNo, o: { focus?: boolean } = {}): void {
   view = 'setup';
   openStep = n;
+  // Opening step 5 always starts from the saved mode, never a choice left unsaved earlier.
+  if (n === 5 && status) {
+    for (const r of incomingRadios()) r.checked = r.value === status.incoming.mode;
+  }
   render();
   if (n === 3) void loadAccounts();
   if (o.focus) {
@@ -669,6 +677,7 @@ async function loadNumbers(accountKey: string): Promise<void> {
 /** The log table, and the newest successful send (step 4 counts it as a test). */
 async function loadLog(): Promise<void> {
   const { entries } = await api<{ entries: LogEntry[] }>('api/log?limit=50');
+  // Only the newest 50 rows are read, so an older send isn't seen (see done(), step 4).
   lastSent ??= entries.find((e) => e.direction === 'outbound' && e.status === 'sent')?.at;
   $('log-body').replaceChildren(
     ...entries.map((e) =>
@@ -923,7 +932,12 @@ function wire(): void {
     $('redirect-item').scrollIntoView({ block: 'center' });
     btn('copy-redirect').focus();
   });
-  btn('to-summary').addEventListener('click', () => showManage({ focus: true }));
+  btn('to-summary').addEventListener('click', () => {
+    // A Change (e.g. Disconnect) can leave a required step unfinished: finish that first.
+    const next = status && firstUnfinished(status);
+    if (next) goTo(next, { focus: true });
+    else showManage({ focus: true });
+  });
 
   select('account').addEventListener('change', () => {
     clear('number-msg');

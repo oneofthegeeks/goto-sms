@@ -130,6 +130,27 @@ test('manage: a reload lands on Ready; Change on the number reopens step 3', asy
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 360, height: 800 });
   await expectNoHorizontalScroll(page);
+  // Valid description list: each row holds only dt and dd (Change lives in the dd).
+  await expect(page.locator('#summary-rows > div > :not(dt, dd)')).toHaveCount(0);
+
+  // An unsaved choice in step 5 is dropped: reopening shows the saved mode again.
+  await page.getByRole('button', { name: 'Change incoming texts' }).click();
+  await expect(page.locator('input[name="incoming"][value="polling"]')).toBeChecked();
+  await page.check('input[name="incoming"][value="off"]');
+  await page.click('#to-summary');
+  await expect(page.locator('#manage')).toBeVisible();
+  await page.getByRole('button', { name: 'Change incoming texts' }).click();
+  await expect(page.locator('input[name="incoming"][value="polling"]')).toBeChecked();
+
+  // Back to summary after a Disconnect goes to the unfinished step, not a stale Ready card.
+  // (Runs last: it leaves the app disconnected.)
+  await page.click('#to-summary');
+  await page.getByRole('button', { name: 'Change goto login' }).click();
+  await page.click('#disconnect');
+  await expect(page.locator('#connect-msg')).toContainText('Disconnected');
+  await page.click('#to-summary');
+  await expect(page.locator('#step-2')).toBeVisible();
+  await expect(page.locator('#manage')).toBeHidden();
 });
 
 test('dark color scheme renders with a dark background', async ({ browser }) => {
