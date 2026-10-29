@@ -1,6 +1,6 @@
-/* Calm slate-teal palette. Tokens first; dark mode redefines them. */
+/* Tokens first. Light lives on :root; dark (the default) redefines them under data-theme. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #f2f5f4;
   --surface: #ffffff;
   --sunken: #f6f8f7;
@@ -20,25 +20,25 @@
   --radius: 14px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1413;
-    --surface: #161e1d;
-    --sunken: #121918;
-    --ink: #e2eae7;
-    --muted: #9bada8;
-    --line: #2a3533;
-    --accent: #5cc4ad;
-    --accent-ink: #062520;
-    --accent-soft: #173a33;
-    --ok: #82d6a2;
-    --ok-bg: #14301f;
-    --warn: #efc56a;
-    --warn-bg: #2f2711;
-    --bad: #f3a59d;
-    --bad-bg: #371714;
-    --code-bg: #212b29;
-  }
+/* index.html sets data-theme before first paint (default dark, or the saved choice). */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #111317;
+  --surface: #1b1e24;
+  --sunken: #16191e;
+  --ink: #e6e8eb;
+  --muted: #a1a8b3;
+  --line: #2e333b;
+  --accent: #5cc4ad;
+  --accent-ink: #062520;
+  --accent-soft: #173a33;
+  --ok: #82d6a2;
+  --ok-bg: #14301f;
+  --warn: #efc56a;
+  --warn-bg: #2f2711;
+  --bad: #f3a59d;
+  --bad-bg: #371714;
+  --code-bg: #262b33;
 }
 
 *,
@@ -128,9 +128,15 @@ pre {
 .top {
   padding: 2rem 0 1.75rem;
 }
-.back {
-  display: inline-block;
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
   margin-bottom: 1rem;
+}
+.back {
   font-weight: 600;
   text-decoration: none;
 }
@@ -467,6 +473,12 @@ button.ghost {
 }
 button.ghost:hover {
   border-color: var(--accent);
+}
+button.theme-toggle {
+  margin-left: auto;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.86rem;
+  border-radius: 999px;
 }
 button.small {
   padding: 0.25rem 0.7rem;

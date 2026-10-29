@@ -19,22 +19,22 @@ async function expectNoHorizontalScroll(page: Page): Promise<void> {
   expect(fits).toBe(true);
 }
 
-/** Screenshots of the current view at 320, 768 and 1440 px, light and dark (SHOTS_DIR only). */
+/** Screenshots of the current view at 320, 768 and 1440 px, dark (default) and light (SHOTS_DIR only). */
 async function shots(page: Page, name: string): Promise<void> {
   if (!SHOTS_DIR) return;
   const size = page.viewportSize();
-  for (const colorScheme of ['light', 'dark'] as const) {
-    await page.emulateMedia({ colorScheme });
+  for (const theme of ['dark', 'light'] as const) {
+    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
     for (const width of [320, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await expectNoHorizontalScroll(page);
       await page.screenshot({
-        path: `${SHOTS_DIR}/${name}-${width}-${colorScheme}.png`,
+        path: `${SHOTS_DIR}/${name}-${width}-${theme}.png`,
         fullPage: true,
       });
     }
   }
-  await page.emulateMedia({ colorScheme: 'light' });
+  await page.evaluate(() => (document.documentElement.dataset.theme = 'dark'));
   if (size) await page.setViewportSize(size);
 }
 
@@ -153,19 +153,37 @@ test('manage: a reload lands on Ready; Change on the number reopens step 3', asy
   await expect(page.locator('#manage')).toBeHidden();
 });
 
-test('dark color scheme renders with a dark background', async ({ browser }) => {
-  const background = async (colorScheme: 'light' | 'dark') => {
-    const context = await browser.newContext({ colorScheme, httpCredentials: AUTH });
-    const page = await context.newPage();
-    await page.goto(`${APP}/goto-sms/`);
-    await expect(page.locator('#loading')).toBeHidden();
-    const color = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    await context.close();
-    return color;
-  };
-  const dark = await background('dark');
-  expect(dark).not.toBe(await background('light'));
-  // A dark background: every channel low.
-  const channels = (dark.match(/\d+/g) ?? []).slice(0, 3).map(Number);
-  expect(Math.max(...channels)).toBeLessThan(60);
+test('theme: dark by default, the toggle switches to light and survives a reload', async ({
+  browser,
+}) => {
+  // A light OS preference must not matter: dark is the default.
+  const context = await browser.newContext({ colorScheme: 'light', httpCredentials: AUTH });
+  const page = await context.newPage();
+  const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.goto(`${APP}/goto-sms/`);
+  await expect(page.locator('#loading')).toBeHidden();
+
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  expect(await background()).toBe('rgb(17, 19, 23)'); // --bg #111317
+  const toDark = page.getByRole('button', { name: 'Switch to light mode' });
+  await expect(toDark).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  await toDark.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  expect(await background()).toBe('rgb(242, 245, 244)'); // --bg #f2f5f4
+  await expect(page.getByRole('button', { name: 'Switch to dark mode' })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  await page.reload();
+  await expect(page.locator('#loading')).toBeHidden();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  expect(await background()).toBe('rgb(242, 245, 244)');
+
+  await page.getByRole('button', { name: 'Switch to dark mode' }).click();
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await context.close();
 });

@@ -1002,4 +1002,26 @@ async function main(): Promise<void> {
   }
 }
 
+/** Dark is the default; the header button switches to light and remembers it in this browser. */
+function initThemeToggle(): void {
+  const button = $<HTMLButtonElement>('theme-toggle');
+  const paint = (): void => {
+    const dark = document.documentElement.dataset.theme !== 'light';
+    button.textContent = dark ? 'Light mode' : 'Dark mode';
+    button.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+  };
+  button.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem('goto-sms-theme', next);
+    } catch {
+      // Storage blocked: the choice still applies until reload.
+    }
+    paint();
+  });
+  paint();
+}
+
+initThemeToggle();
 void main();
