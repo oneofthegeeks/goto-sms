@@ -1,6 +1,6 @@
 # goto-sms
 
-Live: v0.2.0 (2026-10-29) — guided setup page, backUrl/loginUrl, verifyConnection, CHANGEME = unset; requires Node 22+ (published via tag workflow + trusted publishing, provenance)
+Live: v0.2.1 (2026-10-29) — setup page dark by default (light toggle); guided setup page, backUrl/loginUrl, verifyConnection, CHANGEME = unset; requires Node 22+ (published via tag workflow + trusted publishing, provenance)
 
 ## What This Is
 
