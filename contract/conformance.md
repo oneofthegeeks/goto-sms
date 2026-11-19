@@ -1,6 +1,6 @@
 # Conformance checklist
 
-Every implementation of goto-sms (any language) must satisfy these 23 behaviours. Each row gives the
+Every implementation of goto-sms (any language) must satisfy these behaviours. Each row gives the
 requirement as written in the design spec and the Node tests that prove it. Test names are
 searchable in `packages/node/test/`; a port should carry one test per row. The Node tests run against
 an in-process fake GoTo (`packages/node/test/helpers/fake-goto.ts`), never the real service.
@@ -30,5 +30,21 @@ an in-process fake GoTo (`packages/node/test/helpers/fake-goto.ts`), never the r
 | C21 | Incoming texts are limited to 10/hour/number.                                                                 | `C21 11th text in an hour is logged and not emitted`                                                                                                                                                                   |
 | C22 | Secrets never appear in API responses or logs, and are encrypted at rest.                                     | `C22 /api/status never contains clientSecret or tokens`; `seal/open round trip`; `tampered ciphertext throws DecryptError`                                                                                             |
 | C23 | The setup page is unreachable without `authorize`.                                                            | `C23 router() without authorize throws; with authorize→false every /api route is 403; /callback and /inbound bypass authorize`                                                                                         |
+
+## Calls (C26-C31)
+
+Call watching (`watchCalls: true`), added in 0.3.0; the rules are in the "Calls" section of
+[`http.md`](http.md). The Node tests are in `packages/node/test/calls.test.ts`. (C24 and C25 are
+taken: aiogotoconnect's `docs/conformance.md` uses them for the `OPTIONS /inbound/:secret` check and
+for texts to another number in the account, which have no row here yet.)
+
+| #   | Requirement                                                                                                                                          | Node test(s)                                                                                                                                                                                                                                                                      |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C26 | Off by default: no call-report requests, no `calls` key, `cr.v1.read` not in `requiredScopes`.                                                       | `C26 status has no calls key and no call scope when off`; `C26 watchCalls off makes no call report requests`                                                                                                                                                                      |
+| C27 | An inbound call to the sending number is delivered once; outbound and other lines' calls never.                                                      | `C27 an inbound call to the sending number is delivered once`; `C27 a call to another number on the account is not delivered`; `C27 an outbound call is not delivered`                                                                                                            |
+| C28 | Nothing that started before watching was switched on is delivered.                                                                                   | `C28 a call that started before watching was switched on is not delivered`                                                                                                                                                                                                        |
+| C29 | Double ring: same E.164 caller, same outcome, within 120 s is one event; a different outcome or a withheld number is its own event.                  | `C29 double ring in one tick is one event`; `C29 double ring across two ticks is one event`; `C29 the same caller three minutes later is a second event`; `C29 voicemail then missed from the same caller are two events`; `C29 two withheld callers a minute apart both deliver` |
+| C30 | A refusal sets `calls.error` = `calls_scope`, backs off to hourly until the login changes, never marks the login expired, and a good look clears it. | `C30 a 403 sets calls_scope and a good look clears it`; `C30 repeated 401 never marks the login expired and backs off`; `C30 a new login lifts the back off`; `C30 status calls carries the error`; `C30 texting still works while calls are refused`                             |
+| C31 | Caller number and caller ID never appear in logs at info or above, nor in the status payload.                                                        | `C31 caller details never reach info logs`; `C31 the status payload never carries a caller number or caller ID`                                                                                                                                                                   |
 
 The `/api/*` request and response shapes the setup page relies on are in [`http.md`](http.md).
