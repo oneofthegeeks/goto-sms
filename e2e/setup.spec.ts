@@ -264,12 +264,39 @@ test('calls: the summary shows Watching, the scope fix when GoTo refuses, and Si
     });
     await expect(row).not.toContainText('Watching');
     await expect(row.locator('.row-done')).toHaveCount(0);
-    const again = row.getByRole('button', { name: 'Sign in again' });
+    const again = row.getByRole('button', {
+      name: 'Sign in to GoTo again so calls can be watched',
+    });
     await expect(again).toBeVisible();
+    await expect(again).toHaveText('Sign in again');
     await expect(again).not.toHaveClass(/primary/);
     // Texting is not interrupted: the summary is still Ready.
     await expect(page.locator('#ready-title')).toContainText('Ready');
     await fitsAPhone('manage-calls-refused');
+    // On a phone the button drops below the message instead of squeezing it into a sliver.
+    await page.setViewportSize({ width: 320, height: 700 });
+    const message = await row.locator('.row-bad').boundingBox();
+    const button = await again.boundingBox();
+    expect(message!.width).toBeGreaterThanOrEqual(200);
+    expect(button!.y).toBeGreaterThanOrEqual(message!.y + message!.height - 1);
+    await expectNoHorizontalScroll(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // If the sign-in cannot start, the reason shows under the summary, and goes when the
+    // summary is shown afresh.
+    await page.route('**/goto-sms/api/connect', (route) =>
+      route.fulfill({ status: 500, json: { error: 'internal', message: 'Something broke' } }),
+    );
+    await again.click();
+    await expect(page.locator('#manage-msg')).toContainText('Something broke');
+    // The browser reports the made-up 500 itself; nothing else may have gone wrong so far.
+    expect(consoleErrors).toHaveLength(1);
+    consoleErrors.length = 0;
+    await page.unroute('**/goto-sms/api/connect');
+    await page.getByRole('button', { name: 'Change incoming texts' }).click();
+    await page.click('#to-summary');
+    await expect(page.locator('#manage')).toBeVisible();
+    await expect(page.locator('#manage-msg')).toBeHidden();
 
     // Step 1 lists the extra scope, with a note saying what it is for.
     await page.getByRole('button', { name: 'Change credentials' }).click();

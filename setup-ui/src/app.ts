@@ -583,8 +583,12 @@ function callsRow(s: Status, calls: NonNullable<Status['calls']>): HTMLElement {
       again.type = 'button';
       again.className = 'linkish change';
       again.textContent = 'Sign in again';
+      again.setAttribute('aria-label', 'Sign in to GoTo again so calls can be watched');
+      // On a phone the button goes under the message rather than squeezing it.
+      dd.className = 'wraps';
       again.addEventListener('click', () => {
         void busy(again, async () => {
+          clear('manage-msg');
           markCallsSignIn(true);
           if (!(await connect('manage-msg'))) markCallsSignIn(false);
         });
@@ -628,6 +632,7 @@ function goTo(n: StepNo, o: { focus?: boolean } = {}): void {
 function showManage(o: { focus?: boolean } = {}): void {
   view = 'manage';
   fromManage = false;
+  clear('manage-msg');
   render();
   void loadLog().catch(() => {});
   void loadOptOuts().catch(() => {});
@@ -653,6 +658,8 @@ function advance(from: StepNo): void {
 
 function apply(s: Status): void {
   status = s;
+  // A fresh status: whatever the summary's last action complained about is out of date.
+  clear('manage-msg');
   render();
 }
 

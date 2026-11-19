@@ -785,6 +785,14 @@ th {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.15rem;
   }
+  /* A long message with a button (the Calls refusal): the button goes under the message. */
+  .row dd.wraps {
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+  }
+  .row dd.wraps > span {
+    flex-basis: 100%;
+  }
   /* Each table row becomes a labelled card instead of a scroll box. */
   table.stack thead {
     position: absolute;
