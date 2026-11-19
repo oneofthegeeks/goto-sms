@@ -120,11 +120,17 @@ Returned by `GET /api/status` and by every state-changing route marked "returns 
     "canWebhook": true, // publicUrl is https
     "error": { "error": "goto_api", "message": "GoTo API error 403", "gotoStatus": 403 }, // optional, see below
   },
+  "calls": {
+    // optional: only when the host turned call watching on (see Calls)
+    "watching": true, // a look at the call reports has run and the last one worked
+    "error": { "error": "calls_scope", "message": "…", "gotoStatus": 403 }, // optional; same shape as incoming.error
+  },
   "requiredScopes": [
     "messaging.v1.send",
     "messaging.v1.read",
     "messaging.v1.notifications.manage",
     "voice-admin.v1.read",
+    // plus "cr.v1.read", last, only when call watching is on
   ],
   "back": { "url": "/admin", "label": "Spring Ideas" }, // optional: only when the host set backUrl; label defaults to "the app"
   "startupError": "…", // optional: only when startup failed; a fixed, secret-free reason in plain words
@@ -136,10 +142,60 @@ subscription failed (see `POST /api/selection`): texts to the selected account a
 carries the error code, its message and GoTo's HTTP status, never GoTo's body. It is cleared by the
 next successful `POST /api/incoming` (any mode) or a successful move.
 
+`calls` is present only when the host turned call watching on (Node: `watchCalls: true`; Python:
+`watch_calls=True`) and the package started. `requiredScopes` lists `cr.v1.read` whenever call
+watching is on (also when startup failed), and never otherwise. With watching off there is no `calls` key, no extra scope and no call-report
+request. The rules are in [Calls](#calls). `calls` never carries a caller's number or caller ID.
+
 The page renders `back` as a "← Back to <label>" link. If the package could not start (for
 example no encryption key), the status still answers, with `back` as usual,
 `configured`, `connected` and `ready` false, every source `"unset"`, and `startupError` saying why
 (the package's own message, or only the error's name for anything else).
+
+## Calls
+
+Call watching is a host option, off by default; there is no route and no stored setting for it.
+When it is on, the package polls GoTo's call reports and hands the host one `call` event per
+inbound call to the sending number, and the status payload carries `calls` so the page can say
+whether it works. Both packages keep the same state under the same store keys (`calls:cursor`,
+`calls:since`, `calls:seen` as `[[id, ring, atMs], ...]`, `calls:error`), so a store written by
+one reads correctly in the other.
+
+- **Looks.** One look every call-poll interval (default 120 s), in every incoming mode, only once
+  an account and a sending number are chosen. The first look saves the cursor and "watching since"
+  as now, asks GoTo for the last minute (GoTo answers `400` to an empty window) and delivers
+  nothing. Later looks read from the later of (cursor − 2 h) and (now − 24 h) up to now, every
+  page; if paging is cut short the cursor is not advanced.
+- **Which calls.** A call is delivered when its direction is `INBOUND`, the caller is a
+  `PHONE_NUMBER` and the number dialled normalises to the sending number. When the summary does not
+  say what was dialled, or what the caller is, the full report decides; if that fetch fails the
+  call is left for the next look. Never delivered: outbound calls, calls to other numbers on the
+  account, calls that started before watching was switched on, and a double ring (the same E.164
+  caller with the same outcome within 120 s of a delivered call). A withheld or non-numeric caller
+  is never a repeat.
+- **Delivery is at least once.** The host's `call` handlers are awaited one at a time, in
+  registration order, and the call is saved as seen only after they have all returned; a handler
+  that fails is logged by the error's name and the rest still run. So a slow call handler holds up
+  the next look and shutdown, which waits for a look in flight. (Node's `message` handlers are
+  not awaited; this is the one place the two events differ.)
+- **Failures** land in `calls.error` and nowhere else: none of them moves the cursor, marks the
+  login expired or affects texting, and a good look clears the error.
+  - `calls_scope`: GoTo answered `403`, or `401` again to a freshly refreshed token (`gotoStatus`
+    says which). The message is fixed (below). The package then looks only once an hour, or as
+    soon as the stored login changes (a reconnect or a renewed token). The warning is logged once.
+  - `login_expired`: the login itself is dead (`loginExpired` is already true); no request is made.
+  - `goto_api`: any other GoTo status, with `gotoStatus`.
+  - `goto_unreachable`: the request failed or timed out.
+
+  ```text
+  GoTo refused the call reports. Enable the scope cr.v1.read on the OAuth client, then reconnect.
+  ```
+
+- **Privacy.** A caller's number and caller ID name never appear in a log line at info level or
+  above, in the status payload, or on the page. Caller ID is the carrier's text: untrusted data.
+- **The page** shows a Calls row on its summary only when `calls` is present: `Watching <number>`
+  when `watching` is true, the error's `message` when there is an `error` (with a "Sign in again"
+  button for `calls_scope`, which starts `POST /api/connect` over the live login), else `Starting…`.
 
 ## When startup failed
 
