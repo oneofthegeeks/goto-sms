@@ -31,6 +31,11 @@ interface Status {
     canWebhook: boolean;
     error?: { error: string; message: string; gotoStatus?: number };
   };
+  /** Only when the host watches calls to the sending number (watchCalls). */
+  calls?: {
+    watching: boolean;
+    error?: { error: string; message: string; gotoStatus?: number };
+  };
   requiredScopes: string[];
   back?: { url: string; label: string };
   startupError?: string;
@@ -77,6 +82,8 @@ const MODE_LABEL: Record<Mode, string> = {
   polling: 'Polling every 30 s',
   webhook: 'Webhook',
 };
+/** The scope for GoTo's call reports: listed only when the host watches calls. */
+const CALLS_SCOPE = 'cr.v1.read';
 const CONFIG = "✓ set by your app's config";
 const SECRET_SAVED = 'Saved. Leave blank to keep it.';
 
@@ -211,6 +218,28 @@ function setSkipped(on: boolean): void {
   }
 }
 
+// --- Remembered "signed in again from the Calls row" (this tab only, per mount) --------------
+
+const CALLS_SIGNIN_KEY = 'goto-sms:calls-signin:' + location.pathname;
+/** True once, on the page load that follows a sign-in started from the Calls row. */
+function takeCallsSignIn(): boolean {
+  try {
+    const was = sessionStorage.getItem(CALLS_SIGNIN_KEY) === '1';
+    sessionStorage.removeItem(CALLS_SIGNIN_KEY);
+    return was;
+  } catch {
+    return false;
+  }
+}
+function markCallsSignIn(on: boolean): void {
+  try {
+    if (on) sessionStorage.setItem(CALLS_SIGNIN_KEY, '1');
+    else sessionStorage.removeItem(CALLS_SIGNIN_KEY);
+  } catch {
+    // Storage blocked: the sign-in still works, it just lands on the number step.
+  }
+}
+
 // --- State ------------------------------------------------------------------------------------
 
 let status: Status | undefined;
@@ -228,6 +257,8 @@ let accounts: Account[] | undefined;
 let numbers: NumberEntry[] = [];
 /** Why the last GoTo sign-in failed (from the OAuth callback's ?error=). */
 let loginError: string | undefined;
+/** This page load follows a sign-in started from the Calls row. */
+let callsSignedIn = false;
 
 function done(s: Status, n: StepNo): boolean {
   switch (n) {
@@ -383,6 +414,13 @@ function renderStep1(s: Status): void {
       copy.setAttribute('aria-label', 'Copy ' + scope);
       copy.addEventListener('click', () => copyText(scope, scope + ' copied', code));
       li.append(code, copy);
+      if (scope === CALLS_SCOPE) {
+        li.className = 'noted';
+        const note = document.createElement('span');
+        note.className = 'scope-note';
+        note.textContent = 'for calls to your number';
+        li.append(note);
+      }
       return li;
     }),
   );
@@ -515,7 +553,60 @@ function renderManage(s: Status): void {
       row.append(dt, dd);
       return row;
     }),
+    ...(s.calls ? [callsRow(s, s.calls)] : []),
   );
+}
+
+/** The Calls row of the summary: only for hosts that watch calls (status.calls). */
+function callsRow(s: Status, calls: NonNullable<Status['calls']>): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.id = 'calls-row';
+  const dt = document.createElement('dt');
+  dt.textContent = 'Calls';
+  const dd = document.createElement('dd');
+  const value = document.createElement('span');
+  dd.append(value);
+  if (calls.error) {
+    value.className = 'row-bad';
+    value.textContent = calls.error.message;
+    if (calls.error.error === 'calls_scope') {
+      if (callsSignedIn) {
+        const note = document.createElement('span');
+        note.className = 'row-note';
+        note.textContent =
+          'Signed in. Calls are checked again within a few minutes; reload this page to see.';
+        value.append(' ', note);
+      }
+      // The same sign-in as step 2, over the live login: texting is not interrupted.
+      const again = document.createElement('button');
+      again.type = 'button';
+      again.className = 'linkish change';
+      again.textContent = 'Sign in again';
+      again.setAttribute('aria-label', 'Sign in to GoTo again so calls can be watched');
+      // On a phone the button goes under the message rather than squeezing it.
+      dd.className = 'wraps';
+      again.addEventListener('click', () => {
+        void busy(again, async () => {
+          clear('manage-msg');
+          markCallsSignIn(true);
+          if (!(await connect('manage-msg'))) markCallsSignIn(false);
+        });
+      });
+      dd.append(again);
+    }
+  } else if (calls.watching) {
+    value.textContent = 'Watching ' + phone(s.fromNumber ?? '');
+    const mark = document.createElement('span');
+    mark.className = 'row-done';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = '✓';
+    dd.append(mark);
+  } else {
+    value.textContent = 'Starting…';
+  }
+  row.append(dt, dd);
+  return row;
 }
 
 // --- Navigation -------------------------------------------------------------------------------
@@ -541,6 +632,7 @@ function goTo(n: StepNo, o: { focus?: boolean } = {}): void {
 function showManage(o: { focus?: boolean } = {}): void {
   view = 'manage';
   fromManage = false;
+  clear('manage-msg');
   render();
   void loadLog().catch(() => {});
   void loadOptOuts().catch(() => {});
@@ -566,6 +658,8 @@ function advance(from: StepNo): void {
 
 function apply(s: Status): void {
   status = s;
+  // A fresh status: whatever the summary's last action complained about is out of date.
+  clear('manage-msg');
   render();
 }
 
@@ -800,12 +894,15 @@ async function saveCredentials(): Promise<void> {
   }
 }
 
-async function connect(): Promise<void> {
+/** Starts the GoTo sign-in and leaves the page. False (with the reason shown) if it could not. */
+async function connect(msgId = 'connect-msg'): Promise<boolean> {
   try {
     const { url } = await api<{ url: string }>('api/connect', {});
     location.href = url;
+    return true;
   } catch (err) {
-    showError('connect-msg', err);
+    showError(msgId, err);
+    return false;
   }
 }
 
@@ -915,7 +1012,11 @@ function wire(): void {
   btn('connect').addEventListener('click', () => {
     const b = btn('connect');
     if (b.dataset.action === 'continue') advance(2);
-    else void busy(b, connect);
+    else {
+      void busy(b, async () => {
+        await connect();
+      });
+    }
   });
   btn('disconnect').addEventListener('click', () => {
     void busy(btn('disconnect'), async () => {
@@ -975,6 +1076,7 @@ function wire(): void {
 async function main(): Promise<void> {
   wire();
   const callback = readCallbackResult();
+  callsSignedIn = takeCallsSignIn() && callback === 'connected';
   let s: Status;
   try {
     s = await api<Status>('api/status');
@@ -990,7 +1092,10 @@ async function main(): Promise<void> {
   // The log decides whether the test step is already done, so read it before choosing a step.
   if (!s.startupError && s.connected) await loadLog().catch(() => {});
 
-  if (callback === 'connected' && s.connected) {
+  if (callback === 'connected' && s.connected && callsSignedIn && requiredDone(s)) {
+    // Signed in again from the Calls row: nothing else changed, so back to the summary.
+    showManage({ focus: true });
+  } else if (callback === 'connected' && s.connected) {
     announce('Connected to GoTo');
     goTo(firstUnfinished(s) === 1 ? 1 : 3, { focus: true });
   } else if (callback === 'error') {
