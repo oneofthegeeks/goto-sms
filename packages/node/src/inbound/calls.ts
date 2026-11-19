@@ -103,6 +103,11 @@ export interface CallWatcherOptions {
   /** Resolves once every handler has returned; the call is saved as seen only after that. */
   emit: (call: InboundCall) => Promise<void>;
   intervalMs: number;
+  /**
+   * Whether the host has an on('call') handler yet. While it says no, a look does nothing at
+   * all: a call "delivered" to nobody would be saved as seen and lost.
+   */
+  hasListeners: () => boolean;
   now: () => number;
   logger: Logger;
 }
@@ -292,6 +297,12 @@ export class CallWatcher {
 
   private async look(): Promise<number> {
     const { config, store, tenant, logger } = this.o;
+    if (!this.o.hasListeners()) {
+      // No request, and no cursor, since, seen list or error touched: the first real look
+      // happens once a handler exists.
+      logger.debug('goto-sms: call check skipped; no call handler is registered');
+      return 0;
+    }
     const resolved = await config.resolve();
     const owner = resolved.fromNumber;
     const accountKey = resolved.accountKey;

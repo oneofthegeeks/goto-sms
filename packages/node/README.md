@@ -199,6 +199,9 @@ sms.on('call', async (call) => {
 - **It polls** GoTo's call reports every `callPollIntervalMs` (default 120 000), whatever the mode
   for texts. A report exists only once the call has ended, so the event comes after the call, not
   while it rings. A call that lasts longer than two hours may not be noticed.
+- **Register the handler at startup.** A look does nothing while no call handler is registered
+  (no request, nothing marked seen), so a handler added later still gets the calls that were
+  waiting, and `status().calls` reads `{ watching: false }` until one exists.
 - **Nothing from before switch-on.** The first look starts from now; a call ringing at that moment
   can be missed.
 - **Handlers are awaited, one at a time.** Unlike `message` handlers, each `call` handler is

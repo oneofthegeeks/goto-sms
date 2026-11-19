@@ -162,7 +162,8 @@ whether it works. Both packages keep the same state under the same store keys (`
 one reads correctly in the other.
 
 - **Looks.** One look every call-poll interval (default 120 s), in every incoming mode, only once
-  an account and a sending number are chosen. The first look saves the cursor and "watching since"
+  an account and a sending number are chosen. A look does nothing while no call handler is
+  registered: no request, and no state is touched, so `calls.watching` stays false until then. The first look saves the cursor and "watching since"
   as now, asks GoTo for the last minute (GoTo answers `400` to an empty window) and delivers
   nothing. Later looks read from the later of (cursor − 2 h) and (now − 24 h) up to now, every
   page; if paging is cut short the cursor is not advanced.
