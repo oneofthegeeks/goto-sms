@@ -15,6 +15,9 @@ Open `/goto-sms/` (any username, the password above) and follow the page. Data (
 tokens, message log) lives in `GOTO_SMS_DATA_DIR` (default `./data`), including a generated
 encryption key unless you set `GOTO_SMS_ENCRYPTION_KEY`. Run one process per data directory.
 
+Set `WATCH_CALLS=1` to also report calls to the sending number (`watchCalls: true`; the GoTo
+client then needs the scope `cr.v1.read`). Each call is logged by id and outcome only.
+
 Send a text once connected:
 
 ```sh
