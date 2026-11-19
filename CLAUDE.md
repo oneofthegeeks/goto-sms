@@ -58,6 +58,7 @@ Library, no Docker/Poppy. Release: bump `packages/node/package.json` version + a
 - `prelint`/`typecheck` run the embed step, so a fresh clone lints without a prior build.
 - Package `LICENSE` is a copy of the root one (npm ships it from `packages/node`).
 - Calls (`watchCalls`): `calls.ts` and aiogotoconnect's `calls.py` share constants, store keys (`calls:cursor|since|seen|error`) and store formats; change both or neither, and write any difference into `contract/http.md`.
+- A look does nothing (no request, no state) until an `on('call')` handler is registered; `callPollIntervalMs` under 1000 or not finite resolves to 120000 (a bad value makes `setInterval` fire every 1 ms; `pollIntervalMs` is not guarded yet).
 - `on('call')` handlers are awaited one at a time and the call is saved as seen only after they return (message handlers are not awaited); `close()` waits for a look in flight.
 - Caller numbers and caller ID names never go in a log line at info or above, the status payload or the page (C31).
 - With `watchCalls` off: no call-report request, no `calls` status key, `requiredScopes` unchanged (C26). The page shows its Calls row only when `status.calls` exists.

@@ -214,6 +214,9 @@ sms.on('call', async (call) => {
   as two conversations (the same caller number with the same outcome within two minutes) is one
   event; so is a genuine second call that matches all three. A different outcome, or a withheld
   number, is always its own event.
+- **A backlog can arrive at once.** After a long outage, or once a missing scope is fixed, up to
+  24 hours of calls that started after switch-on are delivered in one go, oldest first. A handler
+  that reacts to a caller (a text back, an alert) should check `call.at` and skip stale ones.
 - **Caller ID is untrusted.** `call.callerName` is whatever the caller's carrier sent (cut to 40
   characters) and can be crafted: show it as data, never act on it. `call.from` is `''` when the
   number is withheld. Neither appears in the package's logs at info level or above, in
