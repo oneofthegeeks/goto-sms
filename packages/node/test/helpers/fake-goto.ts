@@ -24,6 +24,34 @@ export interface FakeResponse {
   location?: string;
 }
 
+/**
+ * A call for the call-events-report routes, in the shape observed live on 2026-11-19: the
+ * summary names the dialled number in caller.type.number; the full report names it in a
+ * PHONE_NUMBER participant's type.
+ */
+export interface FakeCall {
+  id: string;
+  /** callCreated (ISO). */
+  created: string;
+  /** callEnded (ISO), when set. */
+  ended?: string;
+  /** Default 'INBOUND'. */
+  direction?: string;
+  /** The number that was called. */
+  dialled?: string;
+  /** null or absent: withheld. */
+  callerNumber?: string | null;
+  callerName?: string | null;
+  /** callerOutcome; default 'MISSED'. */
+  outcome?: string;
+  /** false: the summary leaves the dialled number out, so the full report must be read. */
+  summaryHasDialled?: boolean;
+  /** false: the summary's caller has no `type` at all. */
+  summaryHasType?: boolean;
+  /** Participants listed in the full report before the one dialled to `dialled`. */
+  extraParticipants?: unknown[];
+}
+
 export type FakeHandler = (req: FakeRequest) => FakeResponse | Promise<FakeResponse>;
 
 export interface FakeGoTo {
@@ -66,6 +94,17 @@ export interface FakeGoTo {
   }>;
   /** Page size for the polling routes, overriding the request's pageSize (paging tests). */
   pollPageSize?: number;
+  /** Calls served by the call-events-report routes (see FakeCall). */
+  calls: FakeCall[];
+  /** Summary items served verbatim after the ones built from `calls` (odd-shape tests). */
+  callSummariesRaw: unknown[];
+  /** Every call-events-report request path (with its query), in order. */
+  callReportHits: string[];
+  /**
+   * When set, every report-summaries request answers this status, whatever the token: GoTo
+   * refusing the call reports (a missing cr.v1.read scope answers 403, or 401 to any token).
+   */
+  callReportsRefuse?: number;
   /** Notification channels (party-invites subscribeInbound); `channelId` is `ch-<n>`. */
   channels: Array<{ channelId: string; channelType: string; webhookChannelData?: unknown }>;
   /** Messaging subscriptions; `id` is `sub-<n>`. */
@@ -104,6 +143,9 @@ export async function startFakeGoTo(
     requests: [],
     sent: [],
     inbound: [],
+    calls: [],
+    callSummariesRaw: [],
+    callReportHits: [],
     channels: [],
     subscriptions: [],
     me: {
@@ -258,6 +300,77 @@ export async function startFakeGoTo(
       }))
       .reverse();
     return paged(req, items);
+  });
+
+  // --- API: call reports (aiogotoconnect's fake_goto.py, from the live shape) ---
+  const SUMMARIES = '/call-events-report/v1/report-summaries';
+  const REPORTS = '/call-events-report/v1/reports/';
+  const callerOf = (c: FakeCall) => ({
+    ...(c.callerName != null ? { name: c.callerName } : {}),
+    ...(c.callerNumber != null ? { number: c.callerNumber } : {}),
+  });
+  const callSummary = (c: FakeCall) => {
+    const outbound = c.direction === 'OUTBOUND';
+    const kind = {
+      value: outbound ? 'LINE' : 'PHONE_NUMBER',
+      ...(!outbound && c.summaryHasDialled !== false ? { number: c.dialled } : {}),
+    };
+    return {
+      conversationSpaceId: c.id,
+      accountKey: 'acct-1',
+      callCreated: c.created,
+      direction: c.direction ?? 'INBOUND',
+      caller: { ...callerOf(c), ...(c.summaryHasType !== false ? { type: kind } : {}) },
+      callerOutcome: c.outcome ?? 'MISSED',
+      participants: [],
+      ...(c.ended ? { callEnded: c.ended } : {}),
+    };
+  };
+  const validBearer = (req: FakeRequest): boolean => {
+    const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+    return bearer !== undefined && fake.tokens.valid.has(bearer);
+  };
+  // Checks the token itself (auth: false), so a refusal can ignore the token as GoTo does.
+  fake.route(
+    'GET',
+    SUMMARIES,
+    (req) => {
+      fake.callReportHits.push(req.path);
+      if (fake.callReportsRefuse !== undefined) return { status: fake.callReportsRefuse, body: {} };
+      if (!validBearer(req)) return { status: 401, body: { error: 'invalid_token' } };
+      if (!req.query.get('accountKey')) {
+        return { status: 400, body: { error: 'accountKey required' } };
+      }
+      const start = Date.parse(req.query.get('startTime') ?? '');
+      const end = Date.parse(req.query.get('endTime') ?? '');
+      // As GoTo does (seen live 2026-11-19): an empty or reversed window is a 400.
+      if (!(start < end)) {
+        return { status: 400, body: { error: 'startTime must be before endTime' } };
+      }
+      const items: unknown[] = fake.calls
+        .filter((c) => start <= Date.parse(c.created) && Date.parse(c.created) <= end)
+        .map(callSummary)
+        // Newest first on purpose: callers must sort, not trust the API's order.
+        .reverse();
+      return paged(req, [...items, ...fake.callSummariesRaw]);
+    },
+    { auth: false },
+  );
+  fake.route('GET', REPORTS, (req) => {
+    fake.callReportHits.push(req.path);
+    const id = decodeURIComponent(req.pathname.slice(REPORTS.length));
+    const c = fake.calls.find((x) => x.id === id);
+    if (!c) return { status: 404, body: { error: 'not_found' } };
+    const mine = { type: { value: 'PHONE_NUMBER', number: c.dialled, caller: callerOf(c) } };
+    return {
+      status: 200,
+      body: {
+        conversationSpaceId: id,
+        callCreated: c.created,
+        direction: c.direction ?? 'INBOUND',
+        participants: [...(c.extraParticipants ?? []), mine],
+      },
+    };
   });
 
   // --- API: notification channels + subscriptions (party-invites subscribeInbound) ---
