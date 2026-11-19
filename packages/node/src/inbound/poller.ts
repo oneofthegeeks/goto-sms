@@ -41,7 +41,7 @@ interface GoToMessage {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 /** GoTo mixes µs and ms precision, so timestamps are compared as parsed numbers, never strings. */
-const ms = (v: unknown): number => {
+export const ms = (v: unknown): number => {
   const t = Date.parse(str(v));
   return Number.isNaN(t) ? NaN : t;
 };
