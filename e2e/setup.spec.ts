@@ -1,7 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const FAKE_SENT = 'http://127.0.0.1:4010/__sent';
+const FAKE = 'http://127.0.0.1:4010';
 const APP = 'http://localhost:4011';
+// The same example app with WATCH_CALLS=1 (playwright.config.ts).
+const CALLS_APP = 'http://localhost:4012';
 const AUTH = { username: 'admin', password: 'e2e-pass', origin: APP, send: 'always' as const };
 // Set SHOTS_DIR to also save screenshots of each view at phone, tablet and desktop widths.
 const SHOTS_DIR = process.env.SHOTS_DIR;
@@ -106,6 +109,18 @@ test('setup: the steps advance from credentials to a sent test, then Finish show
   expect(consoleErrors).toEqual([]);
 });
 
+test('calls: without watchCalls there is no Calls row and no call scope', async ({ page }) => {
+  await page.goto('/goto-sms/');
+  await expect(page.locator('#manage')).toBeVisible();
+  await expect(page.locator('#summary-rows .row')).toHaveCount(4);
+  await expect(page.locator('#calls-row')).toHaveCount(0);
+  await expect(page.locator('#summary-rows')).not.toContainText('Calls');
+  await page.getByRole('button', { name: 'Change credentials' }).click();
+  await expect(page.locator('#scopes li')).toHaveCount(4);
+  await expect(page.locator('#scopes')).not.toContainText('cr.v1.read');
+  await expect(page.locator('#scopes')).not.toContainText('calls');
+});
+
 test('manage: a reload lands on Ready; Change on the number reopens step 3', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/goto-sms/');
@@ -186,4 +201,136 @@ test('theme: dark by default, the toggle switches to light and survives a reload
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await context.close();
+});
+
+test('calls: the summary shows Watching, the scope fix when GoTo refuses, and Sign in again', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    httpCredentials: { ...AUTH, origin: CALLS_APP },
+  });
+  const page = await context.newPage();
+  const consoleErrors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
+  const row = page.locator('#calls-row');
+  /** The page does not poll: reload until the watcher's next look shows. */
+  const afterReload = async (check: () => Promise<void>): Promise<void> => {
+    await expect(async () => {
+      await page.reload();
+      await check();
+    }).toPass({ timeout: 15_000 });
+  };
+  /** Fits a 320 px phone in both themes, then back to dark at the old size. */
+  const fitsAPhone = async (name: string): Promise<void> => {
+    const size = page.viewportSize();
+    await page.setViewportSize({ width: 320, height: 700 });
+    for (const theme of ['light', 'dark'] as const) {
+      await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+      await expectNoHorizontalScroll(page);
+    }
+    if (size) await page.setViewportSize(size);
+    await shots(page, name);
+  };
+
+  try {
+    await fetch(`${FAKE}/__calls/allow`, { method: 'POST' });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${CALLS_APP}/goto-sms/`);
+    // Configured and connected from env: only the test and incoming steps are left.
+    await expect(page.locator('#step-4')).toBeVisible();
+    await page.click('#test-skip');
+    await expect(page.locator('#step-5')).toBeVisible();
+    await page.click('#finish');
+    await expect(page.locator('#manage')).toBeVisible();
+
+    // Working: under the incoming texts row, with the sending number and a done mark.
+    await afterReload(async () => {
+      await expect(row).toContainText('Watching 801-555-0100', { timeout: 1000 });
+    });
+    await expect(page.locator('#summary-rows .row').last()).toHaveAttribute('id', 'calls-row');
+    await expect(row.locator('dt')).toHaveText('Calls');
+    await expect(row.locator('.row-done')).toHaveText('✓');
+    await expect(row.getByRole('button')).toHaveCount(0);
+    await expect(page.locator('#summary-rows > div > :not(dt, dd)')).toHaveCount(0);
+    await fitsAPhone('manage-calls-watching');
+
+    // GoTo refuses the call reports: the exact fix, and a quiet button to sign in again.
+    await fetch(`${FAKE}/__calls/refuse`, { method: 'POST' });
+    await afterReload(async () => {
+      await expect(row).toContainText(
+        'GoTo refused the call reports. Enable the scope cr.v1.read on the OAuth client, then reconnect.',
+        { timeout: 1000 },
+      );
+    });
+    await expect(row).not.toContainText('Watching');
+    await expect(row.locator('.row-done')).toHaveCount(0);
+    const again = row.getByRole('button', { name: 'Sign in again' });
+    await expect(again).toBeVisible();
+    await expect(again).not.toHaveClass(/primary/);
+    // Texting is not interrupted: the summary is still Ready.
+    await expect(page.locator('#ready-title')).toContainText('Ready');
+    await fitsAPhone('manage-calls-refused');
+
+    // Step 1 lists the extra scope, with a note saying what it is for.
+    await page.getByRole('button', { name: 'Change credentials' }).click();
+    const scope = page.locator('#scopes li').filter({ hasText: 'cr.v1.read' });
+    await expect(page.locator('#scopes li')).toHaveCount(5);
+    await expect(scope).toContainText('for calls');
+    await fitsAPhone('setup-step1-calls-scope');
+    await page.click('#to-summary');
+    await expect(page.locator('#manage')).toBeVisible();
+
+    // The admin enables the scope in GoTo, then signs in again from the row: the same sign-in
+    // as step 2, over the live login, and straight back to the summary.
+    await fetch(`${FAKE}/__calls/allow`, { method: 'POST' });
+    // (Wait for the round trip through GoTo: a reload before it would cancel the sign-in.)
+    const callback = page.waitForResponse((r) => r.url().includes('/goto-sms/callback'));
+    await again.click();
+    expect((await callback).status()).toBe(302);
+    await expect(page).toHaveURL(`${CALLS_APP}/goto-sms/`);
+    await expect(page.locator('#manage')).toBeVisible();
+    await expect(page.locator('#setup')).toBeHidden();
+    await expect(page.locator('#ready-title')).toBeFocused();
+    // The new login ends the hourly back-off at the next look.
+    await afterReload(async () => {
+      await expect(row).toContainText('Watching 801-555-0100', { timeout: 1000 });
+    });
+
+    // The two states that depend on timing, with the status answer's `calls` replaced.
+    let calls: unknown = { watching: false };
+    await page.route('**/goto-sms/api/status', async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as Record<string, unknown>;
+      await route.fulfill({ response, json: { ...body, calls } });
+    });
+    // No look has run yet.
+    await page.reload();
+    await expect(row.locator('dd')).toHaveText('Starting…');
+    // Back from Sign in again, before the next look: the refusal still shows, with a note.
+    calls = {
+      watching: false,
+      error: { error: 'calls_scope', message: 'GoTo refused the call reports.', gotoStatus: 403 },
+    };
+    await page.evaluate(() => sessionStorage.setItem('goto-sms:calls-signin:/goto-sms/', '1'));
+    await page.goto(`${CALLS_APP}/goto-sms/?connected=1`);
+    await expect(page.locator('#manage')).toBeVisible();
+    await expect(row).toContainText('GoTo refused the call reports. Signed in.');
+    await fitsAPhone('manage-calls-signed-in');
+    await page.reload();
+    await expect(row).toContainText('GoTo refused the call reports.');
+    await expect(row).not.toContainText('Signed in.');
+    // Another failure has no button: signing in again would not fix it.
+    calls = {
+      watching: false,
+      error: { error: 'goto_unreachable', message: 'GoTo could not be reached' },
+    };
+    await page.reload();
+    await expect(row).toContainText('GoTo could not be reached');
+    await expect(row.getByRole('button')).toHaveCount(0);
+    await page.unroute('**/goto-sms/api/status');
+    expect(consoleErrors).toEqual([]);
+  } finally {
+    await fetch(`${FAKE}/__calls/allow`, { method: 'POST' });
+    await context.close();
+  }
 });
