@@ -105,6 +105,11 @@ export interface FakeGoTo {
    * refusing the call reports (a missing cr.v1.read scope answers 403, or 401 to any token).
    */
   callReportsRefuse?: number;
+  /**
+   * Paging of report-summaries that never ends: every page carries all the items and a
+   * nextPageMarker, the same one each time ('stuck') or a new one each time ('endless').
+   */
+  callSummariesPaging?: 'stuck' | 'endless';
   /** Notification channels (party-invites subscribeInbound); `channelId` is `ch-<n>`. */
   channels: Array<{ channelId: string; channelType: string; webhookChannelData?: unknown }>;
   /** Messaging subscriptions; `id` is `sub-<n>`. */
@@ -330,6 +335,7 @@ export async function startFakeGoTo(
     const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
     return bearer !== undefined && fake.tokens.valid.has(bearer);
   };
+  let markers = 0;
   // Checks the token itself (auth: false), so a refusal can ignore the token as GoTo does.
   fake.route(
     'GET',
@@ -352,6 +358,10 @@ export async function startFakeGoTo(
         .map(callSummary)
         // Newest first on purpose: callers must sort, not trust the API's order.
         .reverse();
+      if (fake.callSummariesPaging) {
+        const marker = fake.callSummariesPaging === 'stuck' ? 'again' : `m${++markers}`;
+        return { status: 200, body: { items, nextPageMarker: marker } };
+      }
       return paged(req, [...items, ...fake.callSummariesRaw]);
     },
     { auth: false },
