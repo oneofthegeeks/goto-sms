@@ -86,7 +86,10 @@ export interface GoToSmsOptions {
    * the scope cr.v1.read on the OAuth client. Off by default.
    */
   watchCalls?: boolean;
-  /** Milliseconds between looks at the call reports; default 120 000. */
+  /**
+   * Milliseconds between looks at the call reports; default 120 000. A value that is not a
+   * finite number, or is under 1000, becomes the default; above 2 147 483 647 becomes that.
+   */
   callPollIntervalMs?: number;
   sendTimeoutMs?: number;
   inboundPerHour?: number;
@@ -276,6 +279,22 @@ function linkOption(name: string, raw: string | undefined): string | undefined {
   return v;
 }
 
+const DEFAULT_CALL_POLL_MS = 120_000;
+const MIN_CALL_POLL_MS = 1000;
+/** The longest delay a Node timer takes; anything above it fires after 1 ms instead. */
+const MAX_TIMER_MS = 2_147_483_647;
+/**
+ * A call-poll interval that is safe to hand to setInterval, which turns NaN, 0, a negative
+ * number or anything above 2^31-1 into 1 ms (hundreds of GoTo requests a second). Not a
+ * finite number, or under a second: the default. Too long: the longest a timer takes.
+ */
+function callPollInterval(ms: number | undefined): number {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < MIN_CALL_POLL_MS) {
+    return DEFAULT_CALL_POLL_MS;
+  }
+  return Math.min(ms, MAX_TIMER_MS);
+}
+
 export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
   const env = o.env ?? process.env;
   const now = o.now ?? Date.now;
@@ -302,7 +321,7 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
     yesIsOptIn: o.yesIsOptIn ?? true,
     pollIntervalMs: o.pollIntervalMs ?? 30_000,
     watchCalls: o.watchCalls ?? false,
-    callPollIntervalMs: o.callPollIntervalMs ?? 120_000,
+    callPollIntervalMs: callPollInterval(o.callPollIntervalMs),
     sendTimeoutMs: o.sendTimeoutMs ?? 10_000,
     inboundPerHour: o.inboundPerHour ?? 10,
     logRetentionDays: o.logRetentionDays ?? 90,
