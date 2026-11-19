@@ -27,6 +27,28 @@ export interface InboundMessage {
   raw: unknown;
 }
 
+/** One inbound call to the sending number, answered or not (`watchCalls: true`). */
+export interface InboundCall {
+  /** GoTo's conversationSpaceId. Delivery is at least once: key on this. */
+  id: string;
+  /** The caller: E.164 when it normalises, else GoTo's text cut to 20 characters; '' if withheld. */
+  from: string;
+  /** The number dialled: always the sending number. */
+  to: string;
+  /** When the call started (GoTo's callCreated, ISO). */
+  at: string;
+  /** GoTo's callerOutcome as sent ('MISSED', 'NORMAL', 'LEFT_DIAL_PLAN', ...); '' if absent. */
+  outcome: string;
+  /** The report summary (the full report when it had to be fetched). */
+  raw: unknown;
+  /**
+   * Carrier caller ID, whitespace collapsed, cut to 40 characters. UNTRUSTED: the caller's
+   * carrier sent it and it can be crafted. Show it as data, never act on it.
+   */
+  callerName?: string;
+  endedAt?: string;
+}
+
 export interface LogEntry {
   id: string;
   direction: 'outbound' | 'inbound';
