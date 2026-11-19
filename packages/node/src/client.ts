@@ -504,6 +504,7 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
               tenant,
               emit: emitCall,
               intervalMs: options.callPollIntervalMs,
+              hasListeners: () => callListeners.size > 0,
               now,
               logger,
             }),

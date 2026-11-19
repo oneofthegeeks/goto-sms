@@ -179,7 +179,7 @@ async function rig(o: { accountKey?: boolean; logger?: Logger } = {}) {
   cleanups.push(() => sms.close());
   const { core } = sms;
   const got: InboundCall[] = [];
-  const state = { emitThrows: false };
+  const state = { emitThrows: false, listening: true };
   /** A fresh watcher over the same store, like a restarted process. */
   const newWatcher = (): CallWatcher =>
     new CallWatcher({
@@ -192,6 +192,7 @@ async function rig(o: { accountKey?: boolean; logger?: Logger } = {}) {
         if (state.emitThrows) throw new Error('handler layer failed');
       },
       intervalMs: 120_000,
+      hasListeners: () => state.listening,
       now,
       logger: o.logger ?? silent,
     });
@@ -754,6 +755,8 @@ async function watchingSms(fake: FakeGoTo, o: Partial<GoToSmsOptions> = {}) {
     ...o,
   });
   cleanups.push(() => sms.close());
+  // A look does nothing while no call handler is registered.
+  sms.on('call', () => {});
   const watcher = sms.core.calls;
   assert.ok(watcher);
   // The look started at startup ran before anything was configured; let it finish.
@@ -898,6 +901,7 @@ for (const mode of ['webhook', 'polling', undefined] as const) {
 
 test('the watcher loop looks on its own', async () => {
   const r = await live({ watchCalls: true, callPollIntervalMs: 20 });
+  r.sms.on('call', () => {});
   for (let i = 0; i < 100 && r.fake.callReportHits.length < 2; i++) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -954,4 +958,80 @@ test('start twice starts one watcher', async () => {
   await first.idle();
   assert.equal(r.sms.core.calls, first);
   assert.equal(r.fake.callReportHits.length, before);
+});
+
+// --- No handler, no look ---
+
+test('a look does nothing while no call handler is registered', async () => {
+  const r = await startedRig();
+  r.call('c1', 1);
+  const before = { hits: r.fake.callReportHits.length, cursor: await r.get('calls:cursor') };
+  r.state.listening = false;
+  r.fake.callReportsRefuse = 403; // would be recorded as an error, if a request went out
+  assert.equal(await r.look(), 0);
+  assert.equal(await r.look(), 0);
+  assert.equal(r.fake.callReportHits.length, before.hits);
+  assert.equal(await r.get('calls:cursor'), before.cursor);
+  assert.equal(await r.get('calls:seen'), undefined);
+  assert.equal(await r.get('calls:error'), undefined);
+  delete r.fake.callReportsRefuse;
+  r.state.listening = true;
+  assert.equal(await r.look(), 1);
+  assert.deepEqual(r.ids(), ['c1']);
+});
+
+test('nothing is asked of GoTo, and status says not watching, until on(call) is registered', async () => {
+  const r = await live({ watchCalls: true, callPollIntervalMs: 3_600_000 });
+  const watcher = r.sms.core.calls;
+  assert.ok(watcher);
+  await watcher.idle();
+  assert.equal(await watcher.tick(), 0);
+  assert.deepEqual(r.fake.callReportHits, []);
+  assert.equal(await r.sms.core.store.get(r.sms.core.tenant, 'calls:cursor'), undefined);
+  assert.deepEqual((await r.sms.status()).calls, { watching: false });
+  // The first real look happens once a handler exists.
+  r.sms.on('call', () => {});
+  assert.equal(await watcher.tick(), 0);
+  assert.equal(r.fake.callReportHits.length, 1);
+  assert.deepEqual((await r.sms.status()).calls, { watching: true });
+});
+
+test('a call waiting at startup is delivered to a handler registered late', async () => {
+  const fake = await fakeGoTo();
+  const clock = { t: T0 };
+  const store = new MemoryStore(() => clock.t);
+  const options = {
+    store,
+    now: () => clock.t,
+    env: { GOTO_ACCOUNT_KEY: 'acct-1' },
+    watchCalls: true,
+    callPollIntervalMs: 3_600_000,
+  };
+  // An earlier run of the app: watching was switched on and the cursor saved.
+  const earlier = await connectedSms(fake, options);
+  earlier.on('call', () => {});
+  await earlier.core.calls!.idle();
+  await earlier.core.calls!.tick();
+  await earlier.close();
+
+  // Someone rings while it is down; then it starts and registers its handler late.
+  clock.t += 2 * MIN;
+  fake.calls.push(fakeCall('c1', clock.t - MIN));
+  const sms = await connectedSms(fake, { ...options, connect: false });
+  cleanups.push(() => sms.close());
+  const watcher = sms.core.calls!;
+  await watcher.idle(); // the look at startup
+  const hits = fake.callReportHits.length;
+  assert.equal(await watcher.tick(), 0);
+  assert.equal(fake.callReportHits.length, hits);
+  assert.equal(await store.get('default', 'calls:seen'), undefined);
+
+  const got: InboundCall[] = [];
+  sms.on('call', (c) => void got.push(c));
+  assert.equal(await watcher.tick(), 1);
+  assert.equal(await watcher.tick(), 0);
+  assert.deepEqual(
+    got.map((c) => c.id),
+    ['c1'],
+  );
 });
