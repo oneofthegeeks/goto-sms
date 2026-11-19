@@ -27,7 +27,14 @@ import { SETUP_HTML } from './server/setup-html.generated.js';
 import { buildStatus, startupErrorText, type StatusPayload } from './server/status.js';
 import { FileStore } from './store/file.js';
 import type { GoToSmsStore } from './store/types.js';
-import type { FetchLike, InboundMessage, Logger, SendOptions, SendResult } from './types.js';
+import type {
+  FetchLike,
+  InboundCall,
+  InboundMessage,
+  Logger,
+  SendOptions,
+  SendResult,
+} from './types.js';
 
 const DEFAULT_AUTH_BASE = 'https://authentication.logmeininc.com';
 const DEFAULT_API_BASE = 'https://api.goto.com';
@@ -73,6 +80,13 @@ export interface GoToSmsOptions {
   replies?: Partial<KeywordReplies>;
   yesIsOptIn?: boolean;
   pollIntervalMs?: number;
+  /**
+   * Calls to the sending number as on('call') events, by polling GoTo's call reports. Needs
+   * the scope cr.v1.read on the OAuth client. Off by default.
+   */
+  watchCalls?: boolean;
+  /** Milliseconds between looks at the call reports; default 120 000. */
+  callPollIntervalMs?: number;
   sendTimeoutMs?: number;
   inboundPerHour?: number;
   logRetentionDays?: number;
@@ -102,6 +116,8 @@ export interface ResolvedOptions {
   replies: KeywordReplies;
   yesIsOptIn: boolean;
   pollIntervalMs: number;
+  watchCalls: boolean;
+  callPollIntervalMs: number;
   sendTimeoutMs: number;
   inboundPerHour: number;
   logRetentionDays: number;
@@ -134,15 +150,28 @@ export interface Core {
   webhookUrl(secret: string): string | undefined;
   /** Background work started by handlers (post-204 inbound processing); close() awaits it. */
   inflight: Set<Promise<void>>;
+  /**
+   * Hands a call to the on('call') handlers, one at a time, and resolves when they have all
+   * returned (what the call watcher awaits before it saves the call as seen).
+   */
+  emitCall(call: InboundCall): Promise<void>;
 }
 
 type Handler = (m: InboundMessage) => void;
+type CallHandler = (call: InboundCall) => void | Promise<void>;
 
 export interface GoToSms {
   send(to: string, text: string, o?: SendOptions): Promise<SendResult>;
   sendOrThrow(to: string, text: string, o?: SendOptions): Promise<SendResult>;
+  /**
+   * 'message': an inbound text. 'call': an inbound call to the sending number (needs
+   * `watchCalls: true`). Call handlers are awaited one at a time, in registration order, and
+   * the call is saved as seen only after they return: do slow work in the background.
+   */
   on(ev: 'message', fn: Handler): this;
+  on(ev: 'call', fn: CallHandler): this;
   off(ev: 'message', fn: Handler): this;
+  off(ev: 'call', fn: CallHandler): this;
   optOuts: Pick<OptOuts, 'has' | 'add' | 'remove' | 'list'>;
   /**
    * The setup page's status: the GET /api/status payload without `incoming.webhookUrl`, which
@@ -269,6 +298,8 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
     replies: { ...DEFAULT_REPLIES, ...o.replies },
     yesIsOptIn: o.yesIsOptIn ?? true,
     pollIntervalMs: o.pollIntervalMs ?? 30_000,
+    watchCalls: o.watchCalls ?? false,
+    callPollIntervalMs: o.callPollIntervalMs ?? 120_000,
     sendTimeoutMs: o.sendTimeoutMs ?? 10_000,
     inboundPerHour: o.inboundPerHour ?? 10,
     logRetentionDays: o.logRetentionDays ?? 90,
@@ -299,6 +330,30 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       } catch (err) {
         logger.warn('goto-sms: inbound handler threw', { error: errorName(err) });
       }
+    }
+  };
+
+  const callListeners = new Set<CallHandler>();
+  let callWarned = false;
+  /**
+   * Unlike `emit`, call handlers are awaited, one at a time in registration order: the
+   * watcher saves a call as seen only after this resolves, which is all that makes delivery
+   * at least once (texts have durable pending rows instead). A handler that throws or rejects
+   * is logged by the error's name only (its message could quote the caller) and the rest run.
+   */
+  const emitCall = async (call: InboundCall): Promise<void> => {
+    // A snapshot, so a handler that calls on() doesn't get this same call.
+    for (const fn of Array.from(callListeners)) {
+      try {
+        await fn(call);
+      } catch (err) {
+        logger.warn('goto-sms: call handler threw', { error: errorName(err) });
+      }
+    }
+  };
+  const checkEvent = (ev: string): void => {
+    if (ev !== 'message' && ev !== 'call') {
+      throw new Error(`goto-sms: unknown event '${ev}'; the events are 'message' and 'call'`);
     }
   };
 
@@ -436,6 +491,7 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       logger,
       options,
       inflight: new Set(),
+      emitCall,
       async incomingMode() {
         const mode = await store.get(tenant, 'inbound:mode');
         return mode === 'webhook' || mode === 'polling' ? mode : 'off';
@@ -501,12 +557,24 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       if (isResult(c)) throw new SendFailedError(c);
       return c.sender.sendOrThrow(to, text, { dedupeKey: opts.dedupeKey });
     },
-    on(_ev, fn) {
-      listeners.add(fn);
+    on(ev: 'message' | 'call', fn: Handler | CallHandler) {
+      checkEvent(ev);
+      if (ev === 'call') {
+        if (!options.watchCalls && !callWarned) {
+          callWarned = true;
+          logger.warn(
+            "goto-sms: an on('call') handler was registered, but calls are not being watched; " +
+              'pass watchCalls: true to createGoToSms',
+          );
+        }
+        callListeners.add(fn as CallHandler);
+      } else listeners.add(fn as Handler);
       return this;
     },
-    off(_ev, fn) {
-      listeners.delete(fn);
+    off(ev: 'message' | 'call', fn: Handler | CallHandler) {
+      checkEvent(ev);
+      if (ev === 'call') callListeners.delete(fn as CallHandler);
+      else listeners.delete(fn as Handler);
       return this;
     },
     optOuts: {
