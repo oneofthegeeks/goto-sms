@@ -196,8 +196,8 @@ sms.on('call', async (call) => {
   `call.outcome`: GoTo's own value, e.g. `MISSED`, `NORMAL`, or `LEFT_DIAL_PLAN` (a dial-plan step
   such as voicemail took it). GoTo does not document the full set, so it is a plain string. Calls
   to other numbers on the account, and outbound calls, never arrive.
-- **It polls** GoTo's call reports every `callPollIntervalMs` (default 120 000), whatever the mode
-  for texts. A report exists only once the call has ended, so the event comes after the call, not
+- **It polls** GoTo's call reports every `callPollIntervalMs` (default 120 000; a value under
+  1000, or not a finite number, becomes the default), whatever the mode for texts. A report exists only once the call has ended, so the event comes after the call, not
   while it rings. A call that lasts longer than two hours may not be noticed.
 - **Register the handler at startup.** A look does nothing while no call handler is registered
   (no request, nothing marked seen), so a handler added later still gets the calls that were

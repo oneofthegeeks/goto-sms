@@ -42,7 +42,7 @@ export default defineConfig({
         PORT: String(CALLS_APP_PORT),
         ADMIN_PASSWORD: 'e2e-pass',
         WATCH_CALLS: '1',
-        GOTO_SMS_CALL_POLL_MS: '300',
+        GOTO_SMS_CALL_POLL_MS: '1000', // the shortest the option allows
         GOTO_CLIENT_ID: 'cid',
         GOTO_CLIENT_SECRET: 'csecret',
         GOTO_ACCOUNT_KEY: 'acct-1',

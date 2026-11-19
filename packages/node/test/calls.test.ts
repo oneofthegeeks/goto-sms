@@ -900,10 +900,11 @@ for (const mode of ['webhook', 'polling', undefined] as const) {
 }
 
 test('the watcher loop looks on its own', async () => {
-  const r = await live({ watchCalls: true, callPollIntervalMs: 20 });
+  // The shortest interval the option allows.
+  const r = await live({ watchCalls: true, callPollIntervalMs: 1000 });
   r.sms.on('call', () => {});
   for (let i = 0; i < 100 && r.fake.callReportHits.length < 2; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(r.fake.callReportHits.length >= 2);
 });
@@ -1034,4 +1035,30 @@ test('a call waiting at startup is delivered to a handler registered late', asyn
     got.map((c) => c.id),
     ['c1'],
   );
+});
+
+// --- callPollIntervalMs is made safe for a timer ---
+
+for (const [given, resolved] of [
+  [Number.NaN, 120_000],
+  [Number.POSITIVE_INFINITY, 120_000],
+  [0, 120_000],
+  [-5, 120_000],
+  [999, 120_000],
+  [1000, 1000],
+  [2_147_483_647, 2_147_483_647],
+  [2_147_483_648, 2_147_483_647],
+  [3e12, 2_147_483_647],
+] as const) {
+  test(`callPollIntervalMs ${given} is resolved to ${resolved}`, async () => {
+    const sms = await bare({ watchCalls: true, callPollIntervalMs: given });
+    assert.equal(sms.core.options.callPollIntervalMs, resolved);
+  });
+}
+
+test('a NaN callPollIntervalMs does not make the watcher spin', async () => {
+  const r = await live({ watchCalls: true, callPollIntervalMs: Number.NaN });
+  r.sms.on('call', () => {});
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.ok(r.fake.callReportHits.length <= 1, `${r.fake.callReportHits.length} looks`);
 });
