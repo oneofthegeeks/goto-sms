@@ -880,14 +880,25 @@ test('end to end: a call reaches the handler', async () => {
 });
 
 test('C26 watchCalls off makes no call report requests', async () => {
-  const r = await live();
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(r.sms.core.calls, undefined);
-  assert.deepEqual(r.fake.callReportHits, []);
+  const fake = await fakeGoTo();
+  const store = new MemoryStore();
+  const options = { store, env: { GOTO_ACCOUNT_KEY: 'acct-1' } };
+  // Set up and connected by an earlier run, so a look at startup would have all it needs.
+  await (await connectedSms(fake, options)).close();
+  const { logger } = recorder();
+  const sms = await connectedSms(fake, { ...options, connect: false, logger });
+  cleanups.push(() => sms.close());
+  // Even with a handler registered (which only warns): a watcher, if there were one, would look.
+  sms.on('call', () => {});
+  assert.equal((await sms.status()).ready, true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(sms.core.calls, undefined);
+  assert.deepEqual(fake.callReportHits, []);
   assert.equal(
-    r.fake.requests.some((q) => q.path.includes('call-events-report')),
+    fake.requests.some((q) => q.path.includes('call-events-report')),
     false,
   );
+  assert.equal(await store.get('default', 'calls:cursor'), undefined);
 });
 
 for (const mode of ['webhook', 'polling', undefined] as const) {
@@ -1061,4 +1072,67 @@ test('a NaN callPollIntervalMs does not make the watcher spin', async () => {
   r.sms.on('call', () => {});
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.ok(r.fake.callReportHits.length <= 1, `${r.fake.callReportHits.length} looks`);
+});
+
+// --- Paging cut short, and two cases the review asked for ---
+
+for (const [paging, requests] of [
+  ['stuck', 2], // the marker repeats on the second page
+  ['endless', 50], // the page cap
+] as const) {
+  test(`paging cut short (${paging} marker) keeps the cursor and delivers once`, async () => {
+    const { logger, lines } = recorder();
+    const r = await startedRig({ logger });
+    const cursor = await r.get('calls:cursor');
+    r.call('c1', 1);
+    r.call('c2', 0.5, { callerNumber: '+18015550144' });
+    r.call('other', 0.5, { dialled: OTHER_LINE });
+    r.fake.callSummariesPaging = paging;
+    const before = r.summaries().length;
+    assert.equal(await r.look(), 2);
+    assert.equal(r.summaries().length - before, requests);
+    assert.equal(await r.get('calls:cursor'), cursor);
+    // What it did see is remembered, undelivered calls included.
+    assert.equal(((await r.get('calls:seen')) as unknown[]).length, 3);
+    assert.equal(await r.look(), 0);
+    assert.equal(await r.get('calls:cursor'), cursor);
+    assert.deepEqual(r.ids(), ['c1', 'c2']);
+    const warnings = lines.filter((l) => l.level === 'warn').map((l) => l.m);
+    assert.equal(warnings.length, 2);
+    for (const w of warnings) assert.ok(w.includes('paging of call reports did not finish'));
+    // Once GoTo pages properly again the cursor moves on.
+    delete r.fake.callSummariesPaging;
+    assert.equal(await r.look(), 0);
+    assert.notEqual(await r.get('calls:cursor'), cursor);
+  });
+}
+
+test('C29 a suppressed double ring does not extend the window', async () => {
+  const r = await startedRig();
+  r.clock.t += 5 * MIN;
+  const first = r.clock.t - 4 * MIN;
+  r.fake.calls.push(fakeCall('c1', first));
+  r.fake.calls.push(fakeCall('c2', first + 100_000)); // inside 120 s of c1: the same ring
+  r.fake.calls.push(fakeCall('c3', first + 200_000)); // 100 s after c2, but 200 s after c1
+  assert.equal(await r.look(), 2);
+  assert.deepEqual(r.ids(), ['c1', 'c3']);
+});
+
+test('a seen list written with float times (as Python writes it) is read', async () => {
+  const r = await startedRig();
+  const at = r.clock.t - MIN + 0.5;
+  await r.store.set(r.tenant, 'calls:seen', [
+    ['c1', `${PEER}|MISSED`, at],
+    ['elsewhere', '', at],
+  ]);
+  r.call('c1', 1);
+  r.call('elsewhere', 1, { callerNumber: '+18015550144' });
+  r.call('c2', 0.5); // 30 s after c1: the same ring, known only from the stored entry
+  assert.equal(await r.look(), 0);
+  assert.deepEqual(r.got, []);
+  assert.deepEqual(await r.get('calls:seen'), [
+    ['c1', `${PEER}|MISSED`, at],
+    ['elsewhere', '', at],
+    ['c2', '', r.clock.t - 2 * MIN - 0.5 * MIN],
+  ]);
 });
