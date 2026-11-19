@@ -31,14 +31,14 @@ import { ms } from './poller.js';
 
 export const SUMMARIES = '/call-events-report/v1/report-summaries';
 export const REPORTS = '/call-events-report/v1/reports/';
-export const CURSOR_KEY = 'calls:cursor';
+const CURSOR_KEY = 'calls:cursor';
 // When watching was first switched on. Calls that started before it are never delivered.
 const SINCE_KEY = 'calls:since';
 // [[id, ring, atMs], ...]: every call already looked at. `ring` is set only for a delivered
 // call whose caller number is a real one: "<E.164>|<outcome>", the memory for the double-ring
 // rule. It is "" for everything else.
 const SEEN_KEY = 'calls:seen';
-export const ERROR_KEY = 'calls:error';
+const ERROR_KEY = 'calls:error';
 // Written by oauth.ts: the sealed token record. Read here only to notice that it changed.
 const TOKENS_KEY = 'tokens';
 
@@ -61,7 +61,7 @@ const MAX_PAGES = 50;
 // While GoTo refuses the call reports (scope missing), look only this often. A 401 makes
 // GoToHttp refresh the token before giving up; every two minutes, for good, would be abuse.
 const REFUSED_BACKOFF_MS = 3_600_000;
-export const SCOPE_MESSAGE =
+const SCOPE_MESSAGE =
   'GoTo refused the call reports. Enable the scope cr.v1.read on the OAuth client, ' +
   'then reconnect.';
 const NAME_MAX = 40;

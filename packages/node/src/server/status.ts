@@ -15,6 +15,13 @@ export const REQUIRED_SCOPES = [
   'voice-admin.v1.read',
 ];
 
+/** The extra scope when call watching is on (`watchCalls: true`), for GoTo's call reports. */
+export const CALLS_SCOPE = 'cr.v1.read';
+
+// Store keys written by inbound/calls.ts (not imported from there: this module stays light).
+const CALLS_ERROR = 'calls:error';
+const CALLS_CURSOR = 'calls:cursor';
+
 /** Store key: why moving the webhook to a newly selected account failed (`incoming.error`). */
 export const INBOUND_ERROR = 'inbound:error';
 
@@ -23,6 +30,17 @@ export interface IncomingError {
   error: string;
   message: string;
   gotoStatus?: number;
+}
+
+/**
+ * Present only with `watchCalls: true`. `watching`: a look has run and the last one worked.
+ * `error` (same shape as `incoming.error`): `calls_scope` when GoTo refuses the call reports
+ * (enable cr.v1.read and reconnect), `login_expired`, `goto_api` or `goto_unreachable`. Never
+ * carries a caller's number or name.
+ */
+export interface CallsStatus {
+  watching: boolean;
+  error?: IncomingError;
 }
 
 /**
@@ -62,6 +80,9 @@ export interface StatusPayload {
      */
     error?: IncomingError;
   };
+  /** Call watching, only when the host turned it on (`watchCalls: true`) and startup worked. */
+  calls?: CallsStatus;
+  /** Also lists `cr.v1.read` when call watching is on. */
   requiredScopes: string[];
   /** The host's backUrl/backLabel, for the page's "← Back to <label>" link. */
   back?: { url: string; label: string };
@@ -111,7 +132,7 @@ export async function buildStatus(
   const base = {
     version: VERSION,
     redirectUri: options.redirectUri ?? '',
-    requiredScopes: [...REQUIRED_SCOPES],
+    requiredScopes: [...REQUIRED_SCOPES, ...(options.watchCalls ? [CALLS_SCOPE] : [])],
     ...(options.back ? { back: { ...options.back } } : {}),
   };
   const canWebhook = options.publicUrl?.startsWith('https://') ?? false;
@@ -139,6 +160,12 @@ export async function buildStatus(
   const webhookUrl = secret ? core.webhookUrl(secret) : undefined;
   const configured = Boolean(r.clientId && r.clientSecret) && !r.credentialsUnreadable;
   const error = asIncomingError(await core.store.get(core.tenant, INBOUND_ERROR));
+  let calls: CallsStatus | undefined;
+  if (options.watchCalls) {
+    const callsError = asIncomingError(await core.store.get(core.tenant, CALLS_ERROR));
+    const looked = (await core.store.get(core.tenant, CALLS_CURSOR)) != null;
+    calls = { watching: looked && !callsError, ...(callsError ? { error: callsError } : {}) };
+  }
   return {
     ...base,
     configured,
@@ -158,5 +185,6 @@ export async function buildStatus(
       canWebhook,
       ...(error ? { error } : {}),
     },
+    ...(calls ? { calls } : {}),
   };
 }
