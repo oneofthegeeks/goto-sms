@@ -396,6 +396,16 @@ pre {
 .scopes button {
   flex: none;
 }
+/* A scope with a note (cr.v1.read, for calls): the note takes its own line under it. */
+.scopes li.noted {
+  flex-wrap: wrap;
+  row-gap: 0.15rem;
+}
+.scope-note {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
 .paste {
   background: var(--sunken);
   border: 1px solid var(--line);
@@ -647,6 +657,20 @@ button:disabled {
 .row .change {
   flex: none;
   white-space: nowrap;
+}
+/* The Calls row: a refusal in the error colour, a quiet note, and a done mark when it works. */
+.row-bad {
+  color: var(--bad);
+  overflow-wrap: anywhere;
+}
+.row-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.row-done {
+  flex: none;
+  color: var(--ok);
+  font-weight: 700;
 }
 .quick {
   display: grid;
