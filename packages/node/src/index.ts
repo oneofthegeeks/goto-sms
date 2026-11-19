@@ -14,7 +14,7 @@ export type {
   GoToSmsOptions,
   IncomingMode,
 } from './client.js';
-export type { StatusPayload, IncomingError } from './server/status.js';
+export type { StatusPayload, IncomingError, CallsStatus } from './server/status.js';
 // Types that public signatures reference, so hosts can name them.
 export type { ConfigField, Source } from './config.js';
 export type { OptOutSource } from './optouts.js';

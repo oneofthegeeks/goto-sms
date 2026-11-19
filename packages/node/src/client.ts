@@ -13,6 +13,7 @@ import {
   TemporaryError,
 } from './errors.js';
 import { createGoToHttp, errorName, type GoToHttp } from './http.js';
+import { CallWatcher } from './inbound/calls.js';
 import { DEFAULT_REPLIES, type KeywordReplies } from './inbound/keywords.js';
 import { Poller } from './inbound/poller.js';
 import { InboundProcessor } from './inbound/processor.js';
@@ -142,6 +143,8 @@ export interface Core {
   log: MessageLog;
   processor: InboundProcessor;
   poller: Poller;
+  /** Set with `watchCalls: true`: polls call reports and emits on('call'). */
+  calls?: CallWatcher;
   logger: Logger;
   options: ResolvedOptions;
   /** Stored `inbound:mode`; 'off' when unset or unrecognized. */
@@ -194,7 +197,7 @@ export interface GoToSms {
   router(): Router;
   /** Only `POST /inbound/:secret`, for hosts that serve the setup page elsewhere or not at all. */
   webhookRouter(): Router;
-  /** Resolves after key resolution, the process lock, replayPending and poller start. */
+  /** Resolves after key resolution, the process lock, replayPending and poller (and call watcher) start. */
   ready: Promise<void>;
   close(): Promise<void>;
   /** Internal, for the package's own handlers; may change in any release. Throws until `ready`. */
@@ -492,6 +495,20 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       options,
       inflight: new Set(),
       emitCall,
+      ...(options.watchCalls
+        ? {
+            calls: new CallWatcher({
+              http,
+              config,
+              store,
+              tenant,
+              emit: emitCall,
+              intervalMs: options.callPollIntervalMs,
+              now,
+              logger,
+            }),
+          }
+        : {}),
       async incomingMode() {
         const mode = await store.get(tenant, 'inbound:mode');
         return mode === 'webhook' || mode === 'polling' ? mode : 'off';
@@ -508,6 +525,8 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
     lockTimer = setInterval(() => void maintain(c), LOCK_REFRESH_MS);
     lockTimer.unref();
     if ((await c.incomingMode()) === 'polling') c.poller.start();
+    // Calls are polled whatever the mode for texts: there is no webhook path for them here.
+    c.calls?.start();
     return c;
   };
 
@@ -629,8 +648,11 @@ export function createGoToSms(o: GoToSmsOptions = {}): GoToSms {
       const c = core;
       if (!c) return;
       c.poller.stop();
-      // Wait for in-flight work so nothing writes to the store after close() resolves.
+      c.calls?.stop();
+      // Wait for in-flight work so nothing writes to the store after close() resolves. A look
+      // at the call reports that is inside a call handler is waited for too.
       await c.poller.idle();
+      await c.calls?.idle();
       await Promise.allSettled([...c.inflight]);
       await maintaining;
       // Release the lock only if it's still ours.

@@ -3,6 +3,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGoToSms, type GoToSms, type GoToSmsOptions } from '../src/client.js';
+import { buildStatus } from '../src/server/status.js';
 import { MemoryStore } from '../src/store/memory.js';
 import type { InboundCall, Logger } from '../src/types.js';
 import { CallWatcher, REPORTS, SUMMARIES } from '../src/inbound/calls.js';
@@ -727,4 +728,230 @@ test('a long call reported after it ends is delivered', async () => {
   r.call('long', 25, { ended: iso(r.clock.t) });
   assert.equal(await r.look(), 1);
   assert.deepEqual(r.ids(), ['long']);
+});
+
+// --- Status: the `calls` key and the conditional scope ---
+
+const BASE_SCOPES = [
+  'messaging.v1.send',
+  'messaging.v1.read',
+  'messaging.v1.notifications.manage',
+  'voice-admin.v1.read',
+];
+
+async function fakeGoTo(): Promise<FakeGoTo> {
+  const fake = await startFakeGoTo();
+  cleanups.push(() => fake.close());
+  return fake;
+}
+
+/** A started client with watchCalls on (its own loop an hour apart), driven by hand. */
+async function watchingSms(fake: FakeGoTo, o: Partial<GoToSmsOptions> = {}) {
+  const sms = await connectedSms(fake, {
+    watchCalls: true,
+    callPollIntervalMs: 3_600_000,
+    env: { GOTO_ACCOUNT_KEY: 'acct-1' },
+    ...o,
+  });
+  cleanups.push(() => sms.close());
+  const watcher = sms.core.calls;
+  assert.ok(watcher);
+  // The look started at startup ran before anything was configured; let it finish.
+  await watcher.idle();
+  return { sms, watcher };
+}
+
+test('C26 status has no calls key and no call scope when off', async () => {
+  const fake = await fakeGoTo();
+  const sms = await connectedSms(fake);
+  cleanups.push(() => sms.close());
+  const status = await sms.status();
+  assert.equal('calls' in status, false);
+  assert.deepEqual(status.requiredScopes, BASE_SCOPES);
+  const viaRoute = await buildStatus(sms.core.options, sms.core, undefined, {
+    includeWebhookUrl: true,
+  });
+  assert.equal('calls' in viaRoute, false);
+  assert.deepEqual(viaRoute.requiredScopes, BASE_SCOPES);
+});
+
+test('requiredScopes lists cr.v1.read only when watching calls', async () => {
+  const fake = await fakeGoTo();
+  const { sms } = await watchingSms(fake);
+  assert.deepEqual((await sms.status()).requiredScopes, [...BASE_SCOPES, 'cr.v1.read']);
+  // Also before startup could finish (no encryption key): the admin still has to tick it.
+  const broken = createGoToSms({ watchCalls: true, store: new MemoryStore(), env: {} });
+  cleanups.push(() => broken.close());
+  const status = await broken.status();
+  assert.ok(status.startupError);
+  assert.deepEqual(status.requiredScopes, [...BASE_SCOPES, 'cr.v1.read']);
+  assert.equal('calls' in status, false);
+});
+
+test('status calls watching is true after a good look', async () => {
+  const fake = await fakeGoTo();
+  const { sms, watcher } = await watchingSms(fake);
+  assert.deepEqual((await sms.status()).calls, { watching: false });
+  await watcher.tick();
+  assert.deepEqual((await sms.status()).calls, { watching: true });
+});
+
+test('C30 status calls carries the error', async () => {
+  const fake = await fakeGoTo();
+  const { sms, watcher } = await watchingSms(fake);
+  await watcher.tick();
+  refuse(fake, 403);
+  await watcher.tick();
+  const expected = {
+    watching: false,
+    error: { error: 'calls_scope', message: SCOPE_MESSAGE, gotoStatus: 403 },
+  };
+  assert.deepEqual((await sms.status()).calls, expected);
+  const viaRoute = await buildStatus(sms.core.options, sms.core, undefined, {
+    includeWebhookUrl: true,
+  });
+  assert.deepEqual(viaRoute.calls, expected);
+  assert.equal((await sms.status()).connected, true);
+});
+
+test('C31 the status payload never carries a caller number or caller ID', async () => {
+  const fake = await fakeGoTo();
+  const clock = { t: T0 };
+  const { sms, watcher } = await watchingSms(fake, { now: () => clock.t });
+  const got: InboundCall[] = [];
+  sms.on('call', (c) => void got.push(c));
+  await watcher.tick();
+  clock.t += 2 * MIN;
+  fake.calls.push(fakeCall('c1', clock.t - MIN));
+  assert.equal(await watcher.tick(), 1);
+  assert.equal(got[0]!.from, PEER);
+  for (const status of [
+    await sms.status(),
+    await buildStatus(sms.core.options, sms.core, undefined, { includeWebhookUrl: true }),
+  ]) {
+    const text = JSON.stringify(status);
+    assert.equal(text.includes(PEER), false);
+    assert.equal(text.includes('Pat Example'), false);
+  }
+});
+
+// --- Wired into the client ---
+
+const fakeCall = (id: string, atMs: number, over: Partial<FakeCall> = {}): FakeCall => ({
+  id,
+  created: iso(atMs),
+  dialled: FROM,
+  callerNumber: PEER,
+  callerName: 'Pat Example',
+  ...over,
+});
+
+async function live(o: Partial<GoToSmsOptions> = {}) {
+  const fake = await fakeGoTo();
+  const clock = { t: T0 };
+  const sms = await connectedSms(fake, {
+    now: () => clock.t,
+    env: { GOTO_ACCOUNT_KEY: 'acct-1' },
+    ...o,
+  });
+  cleanups.push(() => sms.close());
+  return { fake, sms, clock };
+}
+
+test('end to end: a call reaches the handler', async () => {
+  const r = await live({ watchCalls: true, callPollIntervalMs: 3_600_000 });
+  const got: InboundCall[] = [];
+  r.sms.on('call', (c) => void got.push(c));
+  const watcher = r.sms.core.calls;
+  assert.ok(watcher?.running);
+  await watcher.idle();
+  await watcher.tick(); // the first look: sets the cursor
+  r.clock.t += 2 * MIN;
+  r.fake.calls.push(fakeCall('c1', r.clock.t - MIN));
+  assert.equal(await watcher.tick(), 1);
+  assert.deepEqual(
+    got.map((c) => [c.id, c.from, c.to]),
+    [['c1', PEER, FROM]],
+  );
+  assert.deepEqual((await r.sms.status()).calls, { watching: true });
+});
+
+test('C26 watchCalls off makes no call report requests', async () => {
+  const r = await live();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(r.sms.core.calls, undefined);
+  assert.deepEqual(r.fake.callReportHits, []);
+  assert.equal(
+    r.fake.requests.some((q) => q.path.includes('call-events-report')),
+    false,
+  );
+});
+
+for (const mode of ['webhook', 'polling', undefined] as const) {
+  test(`watcher runs in every incoming mode (${mode ?? 'off'})`, async () => {
+    const store = new MemoryStore();
+    if (mode) await store.set('default', 'inbound:mode', mode);
+    const r = await live({ watchCalls: true, store });
+    assert.equal(r.sms.core.calls?.running, true);
+  });
+}
+
+test('the watcher loop looks on its own', async () => {
+  const r = await live({ watchCalls: true, callPollIntervalMs: 20 });
+  for (let i = 0; i < 100 && r.fake.callReportHits.length < 2; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(r.fake.callReportHits.length >= 2);
+});
+
+test('close waits for a running call handler', async () => {
+  const r = await live({ watchCalls: true, callPollIntervalMs: 3_600_000 });
+  let entered!: () => void;
+  let release!: () => void;
+  const enteredP = new Promise<void>((resolve) => (entered = resolve));
+  const releaseP = new Promise<void>((resolve) => (release = resolve));
+  r.sms.on('call', async () => {
+    entered();
+    await releaseP;
+  });
+  const core = r.sms.core;
+  const watcher = core.calls;
+  assert.ok(watcher);
+  await watcher.idle();
+  await watcher.tick();
+  r.clock.t += 2 * MIN;
+  r.fake.calls.push(fakeCall('c1', r.clock.t - MIN));
+  const look = watcher.tick();
+  await enteredP;
+  let closed = false;
+  const closing = r.sms.close().then(() => (closed = true));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(closed, false);
+  // Not saved as seen while the handler is still running.
+  assert.equal(await core.store.get(core.tenant, 'calls:seen'), undefined);
+  release();
+  await closing;
+  assert.equal(await look, 1);
+  const seen = await core.store.get(core.tenant, 'calls:seen');
+  assert.ok(Array.isArray(seen));
+  assert.deepEqual(
+    seen.map((entry) => (entry as unknown[])[0]),
+    ['c1'],
+  );
+  assert.equal(watcher.running, false);
+});
+
+test('start twice starts one watcher', async () => {
+  const r = await live({ watchCalls: true, callPollIntervalMs: 3_600_000 });
+  const first = r.sms.core.calls;
+  assert.ok(first);
+  await first.idle();
+  const before = r.fake.callReportHits.length;
+  // Node starts in createGoToSms (there is no start()): awaiting ready again, or starting the
+  // running watcher again, must not make a second watcher or a second loop.
+  await r.sms.ready;
+  first.start();
+  await first.idle();
+  assert.equal(r.sms.core.calls, first);
+  assert.equal(r.fake.callReportHits.length, before);
 });
