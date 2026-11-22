@@ -15,11 +15,11 @@
     "e2e": "playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^22.0.0",
-    "oxlint": "^1.92.0",
-    "oxlint-tsgolint": "^7.0.2006",
-    "prettier": "^3.0.0",
+    "oxlint": "^1.93.0",
+    "oxlint-tsgolint": "^7.0.2007",
+    "prettier": "^3.10.1",
     "tsup": "^9.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.9.3"
