@@ -27,8 +27,8 @@ texts, storage and troubleshooting.
 | `e2e/`                    | Playwright browser test of the setup page against a fake GoTo.                                |
 | `docs/superpowers/specs/` | The design spec.                                                                              |
 
-Other languages (Python next) are meant to reuse the setup page, the HTTP contract and the
-conformance checklist.
+Other languages reuse the setup page, the HTTP contract and the conformance checklist.
+Python: [aiogotoconnect](https://github.com/oneofthegeeks/aiogotoconnect) (`pip install aiogotoconnect[sms]`).
 
 ## Develop
 
