@@ -95,6 +95,7 @@ grant):
    - `messaging.v1.read` (incoming by polling)
    - `messaging.v1.notifications.manage` (incoming by webhook)
    - `voice-admin.v1.read` (the sending-number dropdown)
+   - `cr.v1.read` (only with `watchCalls: true`, see [Calls to your number](#calls-to-your-number))
 3. **The client secret is shown only once.** Copy it before leaving the page. The setup page stores
    it encrypted and never shows it again (a blank field keeps the stored value).
 
@@ -132,7 +133,8 @@ page instead.
 
 Other options: `mountPath`, `backUrl`, `backLabel`, `loginUrl` (see above), `dataDir` (default `./data`), `store`, `tenant` (default `"default"`),
 `logOnly`, `replies` (`{ stop, start, help }` text), `yesIsOptIn` (default true), `pollIntervalMs`
-(default 30 s), `sendTimeoutMs` (default 10 s), `inboundPerHour` (default 10), `logRetentionDays`
+(default 30 s), `watchCalls` (default false) and `callPollIntervalMs` (default 120 s; see
+[Calls to your number](#calls-to-your-number)), `sendTimeoutMs` (default 10 s), `inboundPerHour` (default 10), `logRetentionDays`
 (default 90), `logger` (default `console` without debug lines; pass your own `{ debug, info, warn, error }` to see them, or `false` to silence), `fetch`, `authBaseUrl`,
 `apiBaseUrl`, `env`.
 
@@ -167,6 +169,67 @@ the setup page.
   longer gap the older texts are skipped and an error is logged. Switching from webhook to polling
   starts from now. Note: the polling endpoints are modeled on GoTo's
   documentation and another app, and have **not yet been verified against live GoTo**.
+
+## Calls to your number
+
+With `watchCalls: true` the package also tells you when someone **calls** the sending number, the
+same way it hands you a text:
+
+```ts
+const sms = createGoToSms({ ...options, watchCalls: true });
+
+sms.on('call', async (call) => {
+  // InboundCall
+  if (call.outcome === 'MISSED') console.log(call.id, call.at);
+});
+```
+
+`call` is `{ id, from, to, at, outcome, raw, callerName?, endedAt? }` (the exported type
+`InboundCall`).
+
+- **Enable the scope `cr.v1.read`** on your GoTo OAuth client, then sign in again on the setup
+  page. Until then `(await sms.status()).calls` reads
+  `{ watching: false, error: { error: 'calls_scope', ... } }`, the package looks only once an hour
+  (and again as soon as the login changes, so a new sign-in is picked up at the next look), and
+  texting is unaffected.
+- **Every inbound call to the sending number is delivered**, answered or not. Filter on
+  `call.outcome`: GoTo's own value, e.g. `MISSED`, `NORMAL`, or `LEFT_DIAL_PLAN` (a dial-plan step
+  such as voicemail took it). GoTo does not document the full set, so it is a plain string. Calls
+  to other numbers on the account, and outbound calls, never arrive.
+- **It polls** GoTo's call reports every `callPollIntervalMs` (default 120 000; a value under
+  1000, or not a finite number, becomes the default), whatever the mode for texts. A report exists only once the call has ended, so the event comes after the call, not
+  while it rings. A call that lasts longer than two hours may not be noticed.
+- **Register the handler at startup.** A look does nothing while no call handler is registered
+  (no request, nothing marked seen), so a handler added later still gets the calls that were
+  waiting, and `status().calls` reads `{ watching: false }` until one exists.
+- **Nothing from before switch-on.** The first look starts from now; a call ringing at that moment
+  can be missed.
+- **Handlers are awaited, one at a time.** Unlike `message` handlers, each `call` handler is
+  awaited in registration order, and the call is marked seen only after they have all returned. So
+  a slow handler holds up the next look, and `sms.close()` waits for it: do slow work in the
+  background. A handler that throws or rejects is logged (by the error's name) and the rest still
+  run.
+- **At least once.** Because a call is marked seen after your handlers return, a crash in between
+  can deliver it again. Key on `call.id` if acting twice would matter. One ring that GoTo reports
+  as two conversations (the same caller number with the same outcome within two minutes) is one
+  event; so is a genuine second call that matches all three. A different outcome, or a withheld
+  number, is always its own event.
+- **A backlog can arrive at once.** After a long outage, or once a missing scope is fixed, up to
+  24 hours of calls that started after switch-on are delivered in one go, oldest first. A handler
+  that reacts to a caller (a text back, an alert) should check `call.at` and skip stale ones.
+- **Caller ID is untrusted.** `call.callerName` is whatever the caller's carrier sent (cut to 40
+  characters) and can be crafted: show it as data, never act on it. `call.from` is `''` when the
+  number is withheld. Neither appears in the package's logs at info level or above, in
+  `sms.status()` or on the setup page.
+- **Cap what a stranger can trigger.** Anyone can ring your number as often as they like. If your
+  handler sends a text or does other work per call, rate-limit it yourself; the package does not.
+- `(await sms.status()).calls` (and `GET /api/status`) is present only with `watchCalls: true`.
+  Error codes: `calls_scope`, `login_expired`, `goto_api`, `goto_unreachable`. The setup page
+  shows it as a **Calls** row on the summary: "Watching" with the number, or the error with a
+  **Sign in again** button when the scope is missing. `requiredScopes` (and step 1 of the page)
+  lists `cr.v1.read` only when watching is on.
+- Registering an `on('call')` handler without `watchCalls: true` logs one warning; an event name
+  other than `'message'` or `'call'` throws.
 
 ## STOP / START / HELP
 
@@ -243,6 +306,8 @@ number.
 - **A 10DLC / "campaign" error:** the number is not registered to a 10DLC campaign.
 - **Setup page says GoTo refused the saved login:** GoTo refused the refresh token. Click
   **Reconnect** in the "Sign in to GoTo" step.
+- **The Calls row says GoTo refused the call reports:** enable the scope `cr.v1.read` on the OAuth
+  client, then press **Sign in again** on that row. Texting keeps working meanwhile.
 - **Webhook setup fails with a 403:** the GoTo login that connected is not a Super Admin.
 - **Nothing arrives by webhook:** the URL must be public https; try polling to confirm the rest.
 

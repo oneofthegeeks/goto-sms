@@ -24,6 +24,8 @@ const isAdmin = (req) => {
   return sameString(decoded.slice(decoded.indexOf(':') + 1), adminPassword);
 };
 
+const watchCalls = process.env.WATCH_CALLS === '1';
+
 const sms = createGoToSms({
   authorize: isAdmin,
   // The setup page shows "← Back to the app" linking here.
@@ -33,8 +35,14 @@ const sms = createGoToSms({
   // Overridden only by the e2e test, which points both at a fake GoTo.
   authBaseUrl: process.env.GOTO_SMS_AUTH_BASE_URL,
   apiBaseUrl: process.env.GOTO_SMS_API_BASE_URL,
+  // WATCH_CALLS=1 also reports calls to the sending number (needs the scope cr.v1.read).
+  watchCalls,
+  // Overridden only by the e2e test, so it does not wait two minutes for a look.
+  callPollIntervalMs: Number(process.env.GOTO_SMS_CALL_POLL_MS) || undefined,
 });
 sms.on('message', (m) => console.log('inbound text', m));
+// The caller's number and caller ID are left out of the log on purpose: they are personal data.
+if (watchCalls) sms.on('call', (call) => console.log('inbound call', call.id, call.outcome));
 
 const app = express();
 app.use(express.json());

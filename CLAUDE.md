@@ -21,7 +21,8 @@ npm run typecheck && npm run lint && npm test && npm run build
 
 - Unit/contract suites: `npm test` (`node:test` via `tsx --test` in `packages/node/test`; builds setup-ui first). They run against an in-process fake GoTo (`test/helpers/fake-goto.ts`); nothing touches real GoTo.
 - Browser e2e: `npm run e2e` (= `npx playwright test`) drives `examples/express-app` against the fake GoTo.
-- C1-C23 map to test names in `contract/conformance.md`; keep it in sync when renaming tests.
+- C1-C23 and C26-C31 (calls) map to test names in `contract/conformance.md`; keep it in sync when renaming tests.
+- e2e runs the example app twice: `:4011` plain, `:4012` with `WATCH_CALLS=1` set up from env; the fake CLI's `POST /__calls/refuse` / `/__calls/allow` make GoTo refuse the call reports.
 
 ## Deployment
 
@@ -35,11 +36,12 @@ Library, no Docker/Poppy. Release: bump `packages/node/package.json` version + a
 
 - `packages/node/src/client.ts` - `createGoToSms` facade and options
 - `packages/node/src/server/express.ts` - Express router; `handlers.ts` - framework-free `(req, res)` handlers for `contract/http.md`
-- `packages/node/src/types.ts` - shared types, `VERSION`; `errors.ts` - error classes; `index.ts` - public exports
+- `packages/node/src/inbound/calls.ts` - `CallWatcher` (`watchCalls`): polls GoTo's call reports, emits `on('call')`; a port of aiogotoconnect's `sms/inbound/calls.py`
+- `packages/node/src/types.ts` - shared types (`InboundCall`), `VERSION`; `errors.ts` - error classes; `index.ts` - public exports
 - `packages/node/scripts/embed-setup.mjs` - embeds `setup-ui/dist` into the generated (gitignored) `setup-html.generated.ts`
 - `packages/node/tsup.config.ts` - build; injects `__VERSION__`
 - `setup-ui/` - the shared static setup page: `src/app.ts` (five-step stepper + manage view, plain TS), `index.html`, `styles.css`
-- `contract/` - `http.md` (endpoint spec), `conformance.md` (C1-C23 to tests)
+- `contract/` - `http.md` (endpoint spec, "Calls" section), `conformance.md` (C1-C23, C26-C31 to tests)
 - `e2e/` - Playwright test; `examples/express-app/` - runnable demo
 - `.github/workflows/` - `ci.yml`, `publish.yml` (tag `v*`, `npm` environment)
 
@@ -55,3 +57,8 @@ Library, no Docker/Poppy. Release: bump `packages/node/package.json` version + a
 - Publish and `npm run build` must run from the repo root: it builds setup-ui before packages/node, otherwise the package embeds a stub page.
 - `prelint`/`typecheck` run the embed step, so a fresh clone lints without a prior build.
 - Package `LICENSE` is a copy of the root one (npm ships it from `packages/node`).
+- Calls (`watchCalls`): `calls.ts` and aiogotoconnect's `calls.py` share constants, store keys (`calls:cursor|since|seen|error`) and store formats; change both or neither, and write any difference into `contract/http.md`.
+- A look does nothing (no request, no state) until an `on('call')` handler is registered; `callPollIntervalMs` under 1000 or not finite resolves to 120000 (a bad value makes `setInterval` fire every 1 ms; `pollIntervalMs` is not guarded yet).
+- `on('call')` handlers are awaited one at a time and the call is saved as seen only after they return (message handlers are not awaited); `close()` waits for a look in flight.
+- Caller numbers and caller ID names never go in a log line at info or above, the status payload or the page (C31).
+- With `watchCalls` off: no call-report request, no `calls` status key, `requiredScopes` unchanged (C26). The page shows its Calls row only when `status.calls` exists.

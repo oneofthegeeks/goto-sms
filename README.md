@@ -22,7 +22,7 @@ texts, storage and troubleshooting.
 | `packages/node/`          | The Node/TypeScript package.                                                                  |
 | `setup-ui/`               | The shared static setup page, built once and embedded into each language package.             |
 | `contract/http.md`        | The language-neutral HTTP contract the setup page calls.                                      |
-| `contract/conformance.md` | The 23 required behaviours (C1-C23), each mapped to its Node test.                            |
+| `contract/conformance.md` | The required behaviours (C1-C23, calls C26-C31), each mapped to its Node test.                |
 | `examples/express-app/`   | A runnable Express demo with a Dockerfile (it logs inbound message bodies; it is an example). |
 | `e2e/`                    | Playwright browser test of the setup page against a fake GoTo.                                |
 | `docs/superpowers/specs/` | The design spec.                                                                              |
